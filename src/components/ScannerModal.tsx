@@ -19,7 +19,11 @@ import {
   Key,
   Package,
   Plus,
-  Tag
+  Tag,
+  ZoomIn,
+  ZoomOut,
+  Focus,
+  Zap
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { GoogleGenAI } from '@google/genai';
@@ -158,6 +162,22 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [barcodeMatchedProduct, setBarcodeMatchedProduct] = useState<Product | null>(null);
 
+  // Auto Zoom & Camera Focus states for Barcode / QR (mengatasi barcode kecil & kamera blur)
+  const [zoomLevel, setZoomLevel] = useState<number>(1.5);
+  const [isAutoZoom, setIsAutoZoom] = useState<boolean>(true);
+  const [zoomRange, setZoomRange] = useState<{ min: number; max: number; step: number; hasHardware: boolean }>({
+    min: 1.0,
+    max: 4.0,
+    step: 0.1,
+    hasHardware: false,
+  });
+  const activeQrTrackRef = useRef<MediaStreamTrack | null>(null);
+  const isQrScanningActiveRef = useRef<boolean>(false);
+  const autoZoomTimerRef = useRef<any>(null);
+  const barcodeDetectorTimerRef = useRef<any>(null);
+  const touchStartDistRef = useRef<number | null>(null);
+  const touchStartZoomRef = useRef<number>(1.5);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fallbackCameraInputRef = useRef<HTMLInputElement>(null);
   const cardPhotoFileInputRef = useRef<HTMLInputElement>(null);
@@ -256,8 +276,67 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
+  // Apply hardware camera zoom or fallback digital zoom
+  const applyZoom = useCallback(async (targetZoom: number) => {
+    const clamped = Math.max(zoomRange.min, Math.min(zoomRange.max, Math.round(targetZoom * 10) / 10));
+    setZoomLevel(clamped);
+
+    let appliedHardware = false;
+    const track = activeQrTrackRef.current;
+
+    if (track) {
+      try {
+        const caps = (track.getCapabilities ? track.getCapabilities() : {}) as any;
+        if (caps && caps.zoom) {
+          const hardwareZoom = Math.max(caps.zoom.min || 1, Math.min(caps.zoom.max || 5, clamped));
+          await track.applyConstraints({
+            advanced: [{ zoom: hardwareZoom } as any],
+          });
+          appliedHardware = true;
+        }
+      } catch (err) {
+        console.warn('Track zoom constraint error:', err);
+      }
+    }
+
+    // Also check Html5Qrcode applyVideoConstraints
+    if (!appliedHardware && qrReaderRef.current) {
+      try {
+        await (qrReaderRef.current as any).applyVideoConstraints({
+          advanced: [{ zoom: clamped }],
+        });
+        appliedHardware = true;
+      } catch {
+        // ignored
+      }
+    }
+
+    // CSS zoom fallback for video preview (ensures instant visual magnification on all devices)
+    const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
+    if (videoEl) {
+      if (!appliedHardware) {
+        videoEl.style.transform = `scale(${clamped})`;
+        videoEl.style.transformOrigin = 'center center';
+        videoEl.style.transition = 'transform 0.25s ease-out';
+      } else {
+        videoEl.style.transform = 'scale(1)';
+      }
+    }
+  }, [zoomRange]);
+
   // Stop QR scanner safely
   const stopQrScanner = useCallback(async () => {
+    isQrScanningActiveRef.current = false;
+    if (autoZoomTimerRef.current) {
+      clearInterval(autoZoomTimerRef.current);
+      autoZoomTimerRef.current = null;
+    }
+    if (barcodeDetectorTimerRef.current) {
+      clearInterval(barcodeDetectorTimerRef.current);
+      barcodeDetectorTimerRef.current = null;
+    }
+    activeQrTrackRef.current = null;
+
     if (qrReaderRef.current) {
       try {
         if (qrReaderRef.current.isScanning) {
@@ -275,6 +354,16 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   // Handle scanned QR / Barcode
   const handleBarcodeScanned = useCallback((code: string) => {
     if (!code) return;
+    isQrScanningActiveRef.current = false;
+    if (autoZoomTimerRef.current) {
+      clearInterval(autoZoomTimerRef.current);
+      autoZoomTimerRef.current = null;
+    }
+    if (barcodeDetectorTimerRef.current) {
+      clearInterval(barcodeDetectorTimerRef.current);
+      barcodeDetectorTimerRef.current = null;
+    }
+
     playBeep();
     const cleanCode = code.trim();
     setScannedCode(cleanCode);
@@ -331,6 +420,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           await stopQrScanner();
         }
 
+        isQrScanningActiveRef.current = true;
+
         const formatsToSupport = [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8,
@@ -368,13 +459,128 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           }
         );
         setIsQrScanning(true);
+
+        // Detect video track & initial zoom configuration (anti-blur macro sweet spot)
+        setTimeout(async () => {
+          const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
+          if (videoEl && videoEl.srcObject) {
+            const stream = videoEl.srcObject as MediaStream;
+            const track = stream.getVideoTracks()[0];
+            if (track) {
+              activeQrTrackRef.current = track;
+              const caps = (track.getCapabilities ? track.getCapabilities() : {}) as any;
+              if (caps && caps.zoom) {
+                setZoomRange({
+                  min: caps.zoom.min || 1.0,
+                  max: Math.min(caps.zoom.max || 5.0, 5.0),
+                  step: caps.zoom.step || 0.1,
+                  hasHardware: true,
+                });
+              }
+            }
+          }
+
+          // Initial sweet-spot zoom (1.5x) so camera stays in sharp macro focus without blur
+          await applyZoom(1.5);
+
+          // BarcodeDetector native acceleration loop on Android / Chrome
+          if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+            try {
+              const BarcodeDetectorClass = (window as any).BarcodeDetector;
+              const detector = new BarcodeDetectorClass({
+                formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'codabar', 'itf'],
+              });
+              barcodeDetectorTimerRef.current = setInterval(async () => {
+                if (!isQrScanningActiveRef.current) {
+                  if (barcodeDetectorTimerRef.current) {
+                    clearInterval(barcodeDetectorTimerRef.current);
+                    barcodeDetectorTimerRef.current = null;
+                  }
+                  return;
+                }
+                const v = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
+                if (v && v.readyState >= 2 && !v.paused) {
+                  try {
+                    const hits = await detector.detect(v);
+                    if (hits && hits.length > 0 && hits[0]?.rawValue) {
+                      handleBarcodeScanned(hits[0].rawValue);
+                    }
+                  } catch {
+                    // skip
+                  }
+                }
+              }, 100);
+            } catch (e) {
+              console.warn('BarcodeDetector error:', e);
+            }
+          }
+        }, 350);
+
       } catch (err: any) {
         console.error('Failed to start QR code reader:', err);
         setQrError('Tidak dapat membuka kamera untuk barcode/QR. Pastikan izin kamera telah diberikan.');
         setIsQrScanning(false);
       }
     }, 150);
-  }, [stopQrScanner, handleBarcodeScanned]);
+  }, [stopQrScanner, handleBarcodeScanned, applyZoom]);
+
+  // Progressive Auto-Zoom cycle loop to catch small barcodes at distance without blur
+  useEffect(() => {
+    if (activeTab !== 'qr_barcode' || !isQrScanning || !isAutoZoom) {
+      if (autoZoomTimerRef.current) {
+        clearInterval(autoZoomTimerRef.current);
+        autoZoomTimerRef.current = null;
+      }
+      return;
+    }
+
+    // Step cycle: 1.5x -> 2.2x -> 3.0x -> 1.5x
+    const zoomSteps = [1.5, 2.2, 3.0];
+    let stepIdx = zoomSteps.indexOf(zoomLevel);
+    if (stepIdx === -1) stepIdx = 0;
+
+    autoZoomTimerRef.current = setInterval(async () => {
+      if (!isQrScanningActiveRef.current) return;
+      stepIdx = (stepIdx + 1) % zoomSteps.length;
+      await applyZoom(zoomSteps[stepIdx]);
+    }, 1900);
+
+    return () => {
+      if (autoZoomTimerRef.current) {
+        clearInterval(autoZoomTimerRef.current);
+        autoZoomTimerRef.current = null;
+      }
+    };
+  }, [isAutoZoom, activeTab, isQrScanning, zoomLevel, applyZoom]);
+
+  // Touch pinch-to-zoom gesture handlers on camera viewfinder
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      touchStartDistRef.current = dist;
+      touchStartZoomRef.current = zoomLevel;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && touchStartDistRef.current !== null) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const factor = dist / touchStartDistRef.current;
+      const newZ = Math.max(zoomRange.min, Math.min(zoomRange.max, touchStartZoomRef.current * factor));
+      setIsAutoZoom(false);
+      applyZoom(newZ);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    touchStartDistRef.current = null;
+  };
 
   // Switch tabs & start/stop corresponding camera
   useEffect(() => {
@@ -1746,24 +1952,192 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                     </div>
                   </div>
 
-                  {/* Viewfinder container */}
-                  <div className="relative rounded-2xl overflow-hidden bg-black aspect-4/3 max-w-sm mx-auto flex items-center justify-center shadow-md border border-slate-800">
+                  {/* Viewfinder container dengan gesture pinch-to-zoom */}
+                  <div 
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                    className="relative rounded-2xl overflow-hidden bg-black aspect-4/3 max-w-sm mx-auto flex items-center justify-center shadow-md border border-slate-800 touch-none"
+                  >
                     <div id="qr-reader-container" className="w-full h-full" />
 
                     {isQrScanning && (
-                      <div className="absolute inset-0 pointer-events-none flex flex-col justify-center items-center">
-                        <div className="w-60 h-28 border-2 border-teal-400/90 rounded-2xl relative shadow-[0_0_15px_rgba(20,184,166,0.3)]">
-                          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
-                          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
-                          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
-                          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
-                          <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-pulse mt-14" />
+                      <>
+                        {/* Status Zoom & Auto-Zoom Toggle Bar (Top Overlay) */}
+                        <div className="absolute top-2.5 inset-x-2.5 flex items-center justify-between z-10 pointer-events-auto">
+                          <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md text-white rounded-xl text-xs font-bold border border-white/10 flex items-center gap-1.5 shadow-sm">
+                            <Focus className="w-3.5 h-3.5 text-teal-400" />
+                            <span>Zoom: {zoomLevel.toFixed(1)}x</span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAutoZoom(!isAutoZoom);
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 backdrop-blur-md border shadow-sm transition cursor-pointer ${
+                              isAutoZoom
+                                ? 'bg-emerald-600/90 text-white border-emerald-400/50 shadow-emerald-900/30'
+                                : 'bg-black/75 text-slate-300 border-white/10 hover:bg-black/90'
+                            }`}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${isAutoZoom ? 'bg-emerald-300 animate-ping' : 'bg-slate-400'}`} />
+                            <span>{isAutoZoom ? 'Auto Zoom: ON' : 'Auto Zoom: OFF'}</span>
+                          </button>
                         </div>
-                        <span className="mt-3 px-2.5 py-0.5 bg-black/70 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
-                          Arahkan Garis Merah ke Garis Barcode
-                        </span>
-                      </div>
+
+                        {/* Viewfinder Reticle & Laser */}
+                        <div className="absolute inset-0 pointer-events-none flex flex-col justify-center items-center">
+                          <div className="w-60 h-28 border-2 border-teal-400/90 rounded-2xl relative shadow-[0_0_15px_rgba(20,184,166,0.3)]">
+                            <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
+                            <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
+                            <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
+                            <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
+                            <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-pulse mt-14" />
+                          </div>
+                          
+                          <div className="mt-2.5 text-center px-2">
+                            <span className="px-2.5 py-0.5 bg-black/75 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
+                              {isAutoZoom ? '🔍 Auto Zoom aktif mendeteksi barcode...' : 'Arahkan garis merah ke barcode'}
+                            </span>
+                          </div>
+                        </div>
+                      </>
                     )}
+                  </div>
+
+                  {/* KONTROL ZOOM CEPAT & PRESET (MENGATASI KAMERA BLUR PADA BARCODE KECIL) */}
+                  <div className="bg-slate-900 text-white p-3 rounded-2xl border border-slate-800 space-y-2.5 shadow-sm max-w-sm mx-auto">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-1.5 font-bold text-slate-200">
+                        <ZoomIn className="w-3.5 h-3.5 text-teal-400" />
+                        <span>Pilihan Zoom Cepat:</span>
+                      </div>
+                      <span className="text-[10px] text-teal-300 font-semibold">
+                        {isAutoZoom ? '⚡ Auto Zoom Aktif' : 'Mode Manual'}
+                      </span>
+                    </div>
+
+                    {/* Tombol Preset Zoom: 1.0x, 1.5x, 2.2x, 3.0x */}
+                    <div className="grid grid-cols-4 gap-1.5 text-xs font-bold">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAutoZoom(false);
+                          applyZoom(1.0);
+                        }}
+                        className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
+                          Math.abs(zoomLevel - 1.0) < 0.1 && !isAutoZoom
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                            : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-750'
+                        }`}
+                      >
+                        1.0x
+                        <span className="block text-[9px] font-normal text-slate-400">Jauh</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAutoZoom(false);
+                          applyZoom(1.5);
+                        }}
+                        className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
+                          Math.abs(zoomLevel - 1.5) < 0.1 && !isAutoZoom
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                            : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-750'
+                        }`}
+                      >
+                        1.5x
+                        <span className="block text-[9px] font-normal text-slate-400">Standar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAutoZoom(false);
+                          applyZoom(2.2);
+                        }}
+                        className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
+                          Math.abs(zoomLevel - 2.2) < 0.1 && !isAutoZoom
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs ring-1 ring-teal-400'
+                            : 'bg-slate-800/90 text-teal-300 border-teal-800/60 hover:bg-slate-750'
+                        }`}
+                      >
+                        2.2x ★
+                        <span className="block text-[9px] font-semibold text-teal-400">Kecil</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAutoZoom(false);
+                          applyZoom(3.0);
+                        }}
+                        className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
+                          Math.abs(zoomLevel - 3.0) < 0.1 && !isAutoZoom
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                            : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-750'
+                        }`}
+                      >
+                        3.0x
+                        <span className="block text-[9px] font-normal text-slate-400">Mini</span>
+                      </button>
+                    </div>
+
+                    {/* Slider Halus untuk Fine-Tuning */}
+                    <div className="pt-1 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAutoZoom(false);
+                          applyZoom(Math.max(zoomRange.min, zoomLevel - 0.2));
+                        }}
+                        className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-300 shrink-0 cursor-pointer"
+                        title="Perkecil Zoom"
+                      >
+                        <ZoomOut className="w-3.5 h-3.5" />
+                      </button>
+
+                      <input
+                        type="range"
+                        min={zoomRange.min}
+                        max={zoomRange.max}
+                        step="0.1"
+                        value={zoomLevel}
+                        onChange={(e) => {
+                          setIsAutoZoom(false);
+                          applyZoom(parseFloat(e.target.value));
+                        }}
+                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-400"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAutoZoom(false);
+                          applyZoom(Math.min(zoomRange.max, zoomLevel + 0.2));
+                        }}
+                        className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-300 shrink-0 cursor-pointer"
+                        title="Perbesar Zoom"
+                      >
+                        <ZoomIn className="w-3.5 h-3.5" />
+                      </button>
+
+                      <span className="text-[11px] font-mono font-bold text-teal-300 w-9 text-right shrink-0">
+                        {zoomLevel.toFixed(1)}x
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* KOTAK SOLUSI & TIPS ANTI-BLUR */}
+                  <div className="bg-amber-50/90 border border-amber-200/80 rounded-2xl p-3 text-xs text-amber-900 space-y-1 max-w-sm mx-auto">
+                    <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                      <span>💡 Tips Mengatasi Barcode Kecil / Kamera Blur:</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-relaxed">
+                      Kamera HP tidak bisa fokus jika ditempel terlalu dekat (&lt; 10 cm). Jaga jarak <b>15–20 cm</b> agar kamera tetap tajam, lalu gunakan <b>Auto Zoom</b> atau tekan tombol <b>Zoom 2.2x / 3.0x</b>.
+                    </p>
                   </div>
 
                   {/* QR scanner error */}
