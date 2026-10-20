@@ -109,7 +109,13 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
   "detectedText": "Ringkasan tulisan cetak atau catatan spidol yang terbaca pada gambar"
 }`;
 
-      const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+      const modelsToTry = [
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-3.8-flash',
+        'gemini-3.1-flash-lite',
+        'gemini-flash-latest'
+      ];
       let lastError: any = null;
       let response: any = null;
 
