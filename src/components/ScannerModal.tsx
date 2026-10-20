@@ -15,7 +15,8 @@ import {
   Search,
   SwitchCamera,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Key
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { GoogleGenAI } from '@google/genai';
@@ -92,7 +93,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   sourceContext = 'pos',
   defaultTab,
 }) => {
-  const { settings, addProduct } = useData();
+  const { settings, addProduct, updateSettings } = useData();
   const [activeTab, setActiveTab] = useState<'ai_vision' | 'qr_barcode'>(
     defaultTab || (sourceContext === 'master_form' ? 'qr_barcode' : 'ai_vision')
   );
@@ -113,6 +114,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState<AiScanResult | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [quickApiKeyInput, setQuickApiKeyInput] = useState('');
+  const [quickKeySaved, setQuickKeySaved] = useState(false);
   const [matchedProducts, setMatchedProducts] = useState<Product[]>([]);
 
   // Registration / Edit Card states (TIDAK LANGSUNG TERSAVE)
@@ -422,47 +425,84 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     e.target.value = '';
   };
 
+  // Quick save API key from modal if missing in hosting and retry
+  const handleSaveQuickApiKeyAndRetry = async () => {
+    const key = quickApiKeyInput.trim();
+    if (!key) return;
+    localStorage.setItem('catatusaha_gemini_api_key', key);
+    try {
+      await updateSettings({ geminiApiKey: key });
+    } catch (e) {
+      console.warn('Failed to persist settings, stored in localStorage:', e);
+    }
+    setQuickKeySaved(true);
+    setAiError(null);
+    if (imagePreview) {
+      const compressedBase64 = await resizeImage(imagePreview, 1024, 1024, 0.85);
+      await analyzeVoucherWithAi(compressedBase64, 'image/jpeg', imagePreview);
+    }
+  };
+
   // Call Server-side or Client-side Gemini API for Voucher & Kuota Analysis
   const analyzeVoucherWithAi = async (base64Image: string, mimeType: string, fullImage: string) => {
     setIsAiLoading(true);
     setAiError(null);
 
-    const apiKey = settings.geminiApiKey || localStorage.getItem('catatusaha_gemini_api_key') || '';
+    // Resolve API key with comprehensive fallbacks:
+    // 1. Settings from Firestore / DataContext
+    // 2. localStorage saved key
+    // 3. Vite build environment key (injected at build time into import.meta.env or process.env)
+    const envKey =
+      (import.meta.env.VITE_GEMINI_API_KEY as string) ||
+      (typeof process !== 'undefined' && (process.env as any)?.GEMINI_API_KEY) ||
+      '';
+    const apiKey = settings.geminiApiKey || localStorage.getItem('catatusaha_gemini_api_key') || envKey;
 
     try {
       let scanData: AiScanResult | null = null;
+      let serverErrorDetail = '';
 
-      // 1. Try server proxy first
-      const res = await fetch('/api/gemini/scan-voucher', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64: base64Image,
-          mimeType,
-          geminiApiKey: apiKey,
-        }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
-          scanData = json.data;
-        }
-      }
-
-      // 2. Fallback: direct client-side GoogleGenAI execution if apiKey is configured
-      if (!scanData && apiKey) {
-        const aiClient = new GoogleGenAI({
-          apiKey,
-          httpOptions: {
-            headers: {
-              'User-Agent': 'aistudio-build',
-            },
-          },
+      // 1. Try server proxy endpoint (/api/gemini/scan-voucher)
+      // This works in development preview and on hosting with server.ts or Vercel serverless functions
+      try {
+        const res = await fetch('/api/gemini/scan-voucher', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: base64Image,
+            mimeType,
+            geminiApiKey: apiKey,
+          }),
         });
 
-        const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
-        const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang SANGAT TELITI, CEPAT, dan AKURAT dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter pulsa.
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const json = await res.json();
+          if (json.success && json.data) {
+            scanData = json.data;
+          }
+        } else if (!res.ok) {
+          if (contentType.includes('application/json')) {
+            const errJson = await res.json().catch(() => ({}));
+            serverErrorDetail = errJson.error || '';
+          }
+          console.warn('Server proxy scan failed with status', res.status, serverErrorDetail);
+        }
+      } catch (serverErr: any) {
+        console.warn('Server proxy unavailable or offline, falling back to direct AI client:', serverErr);
+      }
+
+      // 2. Client-side fallback: Direct GoogleGenAI execution in the browser
+      // This is crucial for static hosting (Firebase Hosting, GitHub Pages, Netlify static, Cloudflare Pages, etc.)
+      if (!scanData && apiKey) {
+        try {
+          const aiClient = new GoogleGenAI({
+            apiKey,
+            // Do NOT set forbidden User-Agent header in browser environment
+          });
+
+          const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+          const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang SANGAT TELITI, CEPAT, dan AKURAT dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter pulsa.
 Tugas Anda adalah menganalisis gambar voucher / kartu perdana / tulisan spidol ini dengan sangat cermat dan mengekstrak data berikut:
 
 1. OPERATOR / PROVIDER:
@@ -511,42 +551,50 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
   "detectedText": "Ringkasan teks terbaca"
 }`;
 
-        const modelsToTry = [
-          'gemini-3.5-flash-lite',
-          'gemini-flash-latest',
-          'gemini-3.8-flash',
-        ];
-        let clientResp: any = null;
-        for (const m of modelsToTry) {
-          try {
-            clientResp = await aiClient.models.generateContent({
-              model: m,
-              contents: [
-                {
-                  role: 'user',
-                  parts: [
-                    { inlineData: { mimeType, data: cleanBase64 } },
-                    { text: prompt },
-                  ],
+          const modelsToTry = [
+            'gemini-3.5-flash-lite',
+            'gemini-flash-latest',
+            'gemini-3.8-flash',
+          ];
+          let clientResp: any = null;
+          for (const m of modelsToTry) {
+            try {
+              clientResp = await aiClient.models.generateContent({
+                model: m,
+                contents: [
+                  {
+                    role: 'user',
+                    parts: [
+                      { inlineData: { mimeType, data: cleanBase64 } },
+                      { text: prompt },
+                    ],
+                  },
+                ],
+                config: {
+                  temperature: 0.1,
+                  maxOutputTokens: 600,
+                  responseMimeType: 'application/json',
                 },
-              ],
-              config: {
-                temperature: 0.1,
-                maxOutputTokens: 600,
-                responseMimeType: 'application/json',
-              },
-            });
-            if (clientResp && clientResp.text) break;
-          } catch (cErr) {
-            console.warn(`Client fallback model ${m} error:`, cErr);
+              });
+              if (clientResp && clientResp.text) break;
+            } catch (cErr: any) {
+              console.warn(`Client fallback model ${m} error:`, cErr);
+            }
           }
-        }
 
-        if (clientResp && clientResp.text) {
-          const respText = clientResp.text;
-          const jsonMatch = respText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            scanData = JSON.parse(jsonMatch[0]);
+          if (clientResp && clientResp.text) {
+            const respText = clientResp.text;
+            const jsonMatch = respText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              scanData = JSON.parse(jsonMatch[0]);
+            } else {
+              scanData = JSON.parse(respText);
+            }
+          }
+        } catch (clientDirectErr: any) {
+          console.error('Direct client Gemini AI error:', clientDirectErr);
+          if (!serverErrorDetail) {
+            serverErrorDetail = clientDirectErr?.message || '';
           }
         }
       }
@@ -558,8 +606,17 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
         return;
       }
 
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(errorData.error || `Gagal menganalisis gambar. Pastikan Google Gemini API Key sudah dimasukkan di Pengaturan.`);
+      // If neither server nor client succeeded:
+      if (!apiKey) {
+        throw new Error(
+          'Google Gemini API Key belum terpasang di hosting. Silakan masukkan Gemini API Key di Pengaturan Usaha > Tab Gemini AI agar fitur scan gambar voucher aktif di hosting.'
+        );
+      }
+
+      throw new Error(
+        serverErrorDetail ||
+          'Gagal menganalisis gambar voucher. Pastikan gambar voucher tampak jelas dan pencahayaan cukup lalu coba lagi.'
+      );
     } catch (err: any) {
       console.error('Scan voucher error:', err);
       setAiError(err.message || 'Gagal memproses gambar voucher. Pastikan foto fokus & jelas lalu coba lagi.');
@@ -1273,11 +1330,50 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                   {/* Error Box */}
                   {aiError && (
-                    <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 flex items-start gap-2.5">
-                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-                      <div className="space-y-1">
-                        <div className="font-bold">Gagal Menganalisis Gambar</div>
-                        <div className="text-[11px] leading-relaxed">{aiError}</div>
+                    <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 space-y-2.5">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+                        <div className="space-y-1 flex-1">
+                          <div className="font-bold">Gagal Menganalisis Gambar</div>
+                          <div className="text-[11px] leading-relaxed">{aiError}</div>
+                        </div>
+                      </div>
+
+                      {/* Quick API Key input if missing in hosting */}
+                      {aiError.toLowerCase().includes('gemini') && (
+                        <div className="p-2.5 bg-white rounded-xl border border-rose-200 space-y-2 text-slate-800">
+                          <div className="flex items-center justify-between text-[11px] font-bold">
+                            <span className="flex items-center gap-1 text-slate-700">
+                              <Key className="w-3.5 h-3.5 text-amber-500" />
+                              Masukkan Gemini API Key:
+                            </span>
+                            <span className="text-[10px] text-teal-700 font-semibold">Gratis dari Google AI Studio</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              value={quickApiKeyInput}
+                              onChange={(e) => setQuickApiKeyInput(e.target.value)}
+                              placeholder="Tempel AIzaSy..."
+                              className="flex-1 px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleSaveQuickApiKeyAndRetry}
+                              className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg text-xs shadow-2xs transition cursor-pointer"
+                            >
+                              Simpan & Scan
+                            </button>
+                          </div>
+                          {quickKeySaved && (
+                            <p className="text-[10px] text-emerald-600 font-bold">
+                              ✓ API Key tersimpan! Mengulangi analisis...
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-3 pt-0.5">
                         <button
                           type="button"
                           onClick={() => {
@@ -1286,10 +1382,23 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                             setAiError(null);
                             startLiveCamera(cameraFacing);
                           }}
-                          className="text-teal-700 font-bold underline text-xs cursor-pointer"
+                          className="text-teal-700 hover:text-teal-900 font-bold underline text-xs cursor-pointer"
                         >
                           Coba Ambil Foto Lagi
                         </button>
+                        {imagePreview && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setAiError(null);
+                              const compressedBase64 = await resizeImage(imagePreview, 1024, 1024, 0.85);
+                              await analyzeVoucherWithAi(compressedBase64, 'image/jpeg', imagePreview);
+                            }}
+                            className="text-slate-600 hover:text-slate-900 font-bold text-xs underline cursor-pointer"
+                          >
+                            Ulangi Analisis Gambar Ini
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}

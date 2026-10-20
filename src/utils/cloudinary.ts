@@ -56,28 +56,35 @@ export async function uploadToCloudinary(
   const uploadPreset = (preferredConfig?.uploadPreset || localConfig.uploadPreset || '').trim();
 
   try {
-    // 1. Try server proxy endpoint
-    const response = await fetch('/api/cloudinary/upload', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        imageBase64,
-        cloudName,
-        uploadPreset,
-      }),
-    });
+    // 1. Try server proxy endpoint if available
+    let data: any = {};
+    try {
+      const response = await fetch('/api/cloudinary/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageBase64,
+          cloudName,
+          uploadPreset,
+        }),
+      });
 
-    const data = await response.json();
-
-    if (response.ok && data.success && data.url) {
-      return {
-        success: true,
-        url: data.url,
-        publicId: data.publicId,
-        source: data.source || 'cloudinary_server',
-      };
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        data = await response.json();
+        if (response.ok && data.success && data.url) {
+          return {
+            success: true,
+            url: data.url,
+            publicId: data.publicId,
+            source: data.source || 'cloudinary_server',
+          };
+        }
+      }
+    } catch (serverErr) {
+      console.warn('Server Cloudinary endpoint unavailable, proceeding to client upload:', serverErr);
     }
 
     // If server responded with notConfigured and we have client-side cloudName + uploadPreset

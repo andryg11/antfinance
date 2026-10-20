@@ -33,11 +33,22 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
+  // Enable CORS for hosting and custom domain environments
+  app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(200);
+    }
+    next();
+  });
+
   // Accept larger payloads for base64 images from camera
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   const ai = apiKey
     ? new GoogleGenAI({
         apiKey,
@@ -53,7 +64,7 @@ async function startServer() {
   app.post('/api/gemini/scan-voucher', async (req, res) => {
     try {
       const { imageBase64, mimeType = 'image/jpeg', geminiApiKey } = req.body;
-      const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
+      const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 
       if (!imageBase64) {
         return res.status(400).json({ error: 'Data gambar (base64) diperlukan.' });
