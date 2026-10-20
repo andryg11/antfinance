@@ -163,23 +163,22 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [barcodeMatchedProduct, setBarcodeMatchedProduct] = useState<Product | null>(null);
 
   // Auto Zoom & Camera Focus states for Barcode / QR (mengatasi barcode kecil & kamera blur)
-  const [zoomLevel, setZoomLevel] = useState<number>(1.5);
-  const [isAutoZoom, setIsAutoZoom] = useState<boolean>(true);
-  const [zoomRange, setZoomRange] = useState<{ min: number; max: number; step: number; hasHardware: boolean }>({
+  const [zoomLevel, setZoomLevel] = useState<number>(1.8);
+  const zoomRangeRef = useRef<{ min: number; max: number; step: number; hasHardware: boolean }>({
     min: 1.0,
     max: 4.0,
     step: 0.1,
     hasHardware: false,
   });
   const activeQrTrackRef = useRef<MediaStreamTrack | null>(null);
-  const isQrScanningActiveRef = useRef<boolean>(false);
-  const autoZoomTimerRef = useRef<any>(null);
-  const barcodeDetectorTimerRef = useRef<any>(null);
+  const isStartingQrRef = useRef<boolean>(false);
   const touchStartDistRef = useRef<number | null>(null);
-  const touchStartZoomRef = useRef<number>(1.5);
+  const touchStartZoomRef = useRef<number>(1.8);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fallbackCameraInputRef = useRef<HTMLInputElement>(null);
+  const qrFallbackFileInputRef = useRef<HTMLInputElement>(null);
+  const qrFallbackCameraInputRef = useRef<HTMLInputElement>(null);
   const cardPhotoFileInputRef = useRef<HTMLInputElement>(null);
   const cardPhotoCameraInputRef = useRef<HTMLInputElement>(null);
   const qrReaderRef = useRef<Html5Qrcode | null>(null);
@@ -276,65 +275,42 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
-  // Apply hardware camera zoom or fallback digital zoom
-  const applyZoom = useCallback(async (targetZoom: number) => {
-    const clamped = Math.max(zoomRange.min, Math.min(zoomRange.max, Math.round(targetZoom * 10) / 10));
+  // Apply hardware camera zoom or fallback digital zoom (Rock-solid, zero camera restarts, zero flicker)
+  const applyZoom = useCallback((targetZoom: number) => {
+    const clamped = Math.max(
+      zoomRangeRef.current.min,
+      Math.min(zoomRangeRef.current.max, Math.round(targetZoom * 10) / 10)
+    );
     setZoomLevel(clamped);
 
-    let appliedHardware = false;
-    const track = activeQrTrackRef.current;
+    // CSS zoom on video element: instant, smooth magnification, 0% chance of camera flashing
+    const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
+    if (videoEl) {
+      videoEl.style.transform = `scale(${clamped})`;
+      videoEl.style.transformOrigin = 'center center';
+      videoEl.style.transition = 'transform 0.15s ease-out';
+    }
 
+    // Hardware camera sensor zoom if available
+    const track = activeQrTrackRef.current;
     if (track) {
       try {
         const caps = (track.getCapabilities ? track.getCapabilities() : {}) as any;
         if (caps && caps.zoom) {
           const hardwareZoom = Math.max(caps.zoom.min || 1, Math.min(caps.zoom.max || 5, clamped));
-          await track.applyConstraints({
+          track.applyConstraints({
             advanced: [{ zoom: hardwareZoom } as any],
-          });
-          appliedHardware = true;
+          }).catch(() => {});
         }
-      } catch (err) {
-        console.warn('Track zoom constraint error:', err);
-      }
-    }
-
-    // Also check Html5Qrcode applyVideoConstraints
-    if (!appliedHardware && qrReaderRef.current) {
-      try {
-        await (qrReaderRef.current as any).applyVideoConstraints({
-          advanced: [{ zoom: clamped }],
-        });
-        appliedHardware = true;
       } catch {
         // ignored
       }
     }
-
-    // CSS zoom fallback for video preview (ensures instant visual magnification on all devices)
-    const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
-    if (videoEl) {
-      if (!appliedHardware) {
-        videoEl.style.transform = `scale(${clamped})`;
-        videoEl.style.transformOrigin = 'center center';
-        videoEl.style.transition = 'transform 0.25s ease-out';
-      } else {
-        videoEl.style.transform = 'scale(1)';
-      }
-    }
-  }, [zoomRange]);
+  }, []);
 
   // Stop QR scanner safely
   const stopQrScanner = useCallback(async () => {
-    isQrScanningActiveRef.current = false;
-    if (autoZoomTimerRef.current) {
-      clearInterval(autoZoomTimerRef.current);
-      autoZoomTimerRef.current = null;
-    }
-    if (barcodeDetectorTimerRef.current) {
-      clearInterval(barcodeDetectorTimerRef.current);
-      barcodeDetectorTimerRef.current = null;
-    }
+    isStartingQrRef.current = false;
     activeQrTrackRef.current = null;
 
     if (qrReaderRef.current) {
@@ -344,26 +320,16 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         }
         await qrReaderRef.current.clear();
       } catch (err) {
-        console.error('Error stopping QR scanner:', err);
+        console.warn('Error stopping QR scanner:', err);
       }
       qrReaderRef.current = null;
-      setIsQrScanning(false);
     }
+    setIsQrScanning(false);
   }, []);
 
   // Handle scanned QR / Barcode
   const handleBarcodeScanned = useCallback((code: string) => {
     if (!code) return;
-    isQrScanningActiveRef.current = false;
-    if (autoZoomTimerRef.current) {
-      clearInterval(autoZoomTimerRef.current);
-      autoZoomTimerRef.current = null;
-    }
-    if (barcodeDetectorTimerRef.current) {
-      clearInterval(barcodeDetectorTimerRef.current);
-      barcodeDetectorTimerRef.current = null;
-    }
-
     playBeep();
     const cleanCode = code.trim();
     setScannedCode(cleanCode);
@@ -407,20 +373,35 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
   // Start QR & Barcode scanner using Html5Qrcode with all standard barcode formats
   const startQrScanner = useCallback(async () => {
+    if (isStartingQrRef.current) return;
+    if (qrReaderRef.current && qrReaderRef.current.isScanning) {
+      return; // Already actively scanning, do not interrupt
+    }
+
+    isStartingQrRef.current = true;
     setQrError(null);
     setScannedCode(null);
     setBarcodeMatchedProduct(null);
 
     setTimeout(async () => {
       const element = document.getElementById('qr-reader-container');
-      if (!element) return;
+      if (!element) {
+        isStartingQrRef.current = false;
+        return;
+      }
 
       try {
         if (qrReaderRef.current) {
-          await stopQrScanner();
+          try {
+            if (qrReaderRef.current.isScanning) {
+              await qrReaderRef.current.stop();
+            }
+            await qrReaderRef.current.clear();
+          } catch {
+            // ignore
+          }
+          qrReaderRef.current = null;
         }
-
-        isQrScanningActiveRef.current = true;
 
         const formatsToSupport = [
           Html5QrcodeSupportedFormats.EAN_13,
@@ -458,10 +439,12 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
             // Scanning frame loop
           }
         );
-        setIsQrScanning(true);
 
-        // Detect video track & initial zoom configuration (anti-blur macro sweet spot)
-        setTimeout(async () => {
+        setIsQrScanning(true);
+        isStartingQrRef.current = false;
+
+        // Detect video track & apply default 1.8x zoom for macro sharpness
+        setTimeout(() => {
           const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
           if (videoEl && videoEl.srcObject) {
             const stream = videoEl.srcObject as MediaStream;
@@ -470,88 +453,62 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
               activeQrTrackRef.current = track;
               const caps = (track.getCapabilities ? track.getCapabilities() : {}) as any;
               if (caps && caps.zoom) {
-                setZoomRange({
+                zoomRangeRef.current = {
                   min: caps.zoom.min || 1.0,
                   max: Math.min(caps.zoom.max || 5.0, 5.0),
                   step: caps.zoom.step || 0.1,
                   hasHardware: true,
-                });
+                };
               }
             }
           }
-
-          // Initial sweet-spot zoom (1.5x) so camera stays in sharp macro focus without blur
-          await applyZoom(1.5);
-
-          // BarcodeDetector native acceleration loop on Android / Chrome
-          if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-            try {
-              const BarcodeDetectorClass = (window as any).BarcodeDetector;
-              const detector = new BarcodeDetectorClass({
-                formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'qr_code', 'upc_a', 'upc_e', 'codabar', 'itf'],
-              });
-              barcodeDetectorTimerRef.current = setInterval(async () => {
-                if (!isQrScanningActiveRef.current) {
-                  if (barcodeDetectorTimerRef.current) {
-                    clearInterval(barcodeDetectorTimerRef.current);
-                    barcodeDetectorTimerRef.current = null;
-                  }
-                  return;
-                }
-                const v = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
-                if (v && v.readyState >= 2 && !v.paused) {
-                  try {
-                    const hits = await detector.detect(v);
-                    if (hits && hits.length > 0 && hits[0]?.rawValue) {
-                      handleBarcodeScanned(hits[0].rawValue);
-                    }
-                  } catch {
-                    // skip
-                  }
-                }
-              }, 100);
-            } catch (e) {
-              console.warn('BarcodeDetector error:', e);
-            }
-          }
-        }, 350);
+          applyZoom(1.8);
+        }, 300);
 
       } catch (err: any) {
-        console.error('Failed to start QR code reader:', err);
-        setQrError('Tidak dapat membuka kamera untuk barcode/QR. Pastikan izin kamera telah diberikan.');
+        console.warn('Failed to start QR code reader:', err);
+        isStartingQrRef.current = false;
         setIsQrScanning(false);
+
+        if (err?.name === 'NotAllowedError' || String(err).toLowerCase().includes('permission denied')) {
+          setQrError('Izin akses kamera ditolak oleh browser. Silakan izinkan akses kamera di setelan browser Anda, atau gunakan tombol "Ambil Foto Barcode" di bawah.');
+        } else {
+          setQrError('Tidak dapat membuka kamera untuk barcode/QR. Anda bisa mencoba lagi atau menggunakan tombol kamera sistem HP di bawah.');
+        }
       }
     }, 150);
-  }, [stopQrScanner, handleBarcodeScanned, applyZoom]);
+  }, [handleBarcodeScanned, applyZoom]);
 
-  // Progressive Auto-Zoom cycle loop to catch small barcodes at distance without blur
-  useEffect(() => {
-    if (activeTab !== 'qr_barcode' || !isQrScanning || !isAutoZoom) {
-      if (autoZoomTimerRef.current) {
-        clearInterval(autoZoomTimerRef.current);
-        autoZoomTimerRef.current = null;
+  // Decode barcode directly from captured photo file or gallery
+  const handleQrPhotoFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const html5QrCode = new Html5Qrcode('qr-reader-container', {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODABAR,
+          Html5QrcodeSupportedFormats.ITF,
+          Html5QrcodeSupportedFormats.QR_CODE,
+        ],
+        verbose: false,
+      });
+
+      const decodedText = await html5QrCode.scanFile(file, true);
+      if (decodedText) {
+        handleBarcodeScanned(decodedText);
       }
-      return;
+    } catch (scanErr) {
+      console.warn('Barcode not found in photo:', scanErr);
+      alert('Barcode tidak terbaca dari foto tersebut. Pastikan foto terang, jelas, dan garis barcode tidak terpotong.');
     }
-
-    // Step cycle: 1.5x -> 2.2x -> 3.0x -> 1.5x
-    const zoomSteps = [1.5, 2.2, 3.0];
-    let stepIdx = zoomSteps.indexOf(zoomLevel);
-    if (stepIdx === -1) stepIdx = 0;
-
-    autoZoomTimerRef.current = setInterval(async () => {
-      if (!isQrScanningActiveRef.current) return;
-      stepIdx = (stepIdx + 1) % zoomSteps.length;
-      await applyZoom(zoomSteps[stepIdx]);
-    }, 1900);
-
-    return () => {
-      if (autoZoomTimerRef.current) {
-        clearInterval(autoZoomTimerRef.current);
-        autoZoomTimerRef.current = null;
-      }
-    };
-  }, [isAutoZoom, activeTab, isQrScanning, zoomLevel, applyZoom]);
+  };
 
   // Touch pinch-to-zoom gesture handlers on camera viewfinder
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -572,8 +529,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         e.touches[0].clientY - e.touches[1].clientY
       );
       const factor = dist / touchStartDistRef.current;
-      const newZ = Math.max(zoomRange.min, Math.min(zoomRange.max, touchStartZoomRef.current * factor));
-      setIsAutoZoom(false);
+      const newZ = Math.max(zoomRangeRef.current.min, Math.min(zoomRangeRef.current.max, touchStartZoomRef.current * factor));
       applyZoom(newZ);
     }
   };
@@ -618,7 +574,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       stopLiveCamera();
       stopQrScanner();
     };
-  }, [isOpen, activeTab, cameraFacing, imagePreview, cardVoucherForm, barcodeMatchedProduct, aiMatchedProduct, startLiveCamera, stopLiveCamera, stopQrScanner, startQrScanner]);
+  }, [isOpen, activeTab, cameraFacing, imagePreview, cardVoucherForm, barcodeMatchedProduct, aiMatchedProduct]);
 
   // Helper to resize/compress image before sending to AI
   const resizeImage = (base64Str: string, maxWidth = 1600, maxHeight = 1600, quality = 0.9): Promise<string> => {
@@ -1963,27 +1919,17 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                     {isQrScanning && (
                       <>
-                        {/* Status Zoom & Auto-Zoom Toggle Bar (Top Overlay) */}
+                        {/* Status Zoom Bar (Top Overlay) */}
                         <div className="absolute top-2.5 inset-x-2.5 flex items-center justify-between z-10 pointer-events-auto">
                           <div className="px-2.5 py-1 bg-black/75 backdrop-blur-md text-white rounded-xl text-xs font-bold border border-white/10 flex items-center gap-1.5 shadow-sm">
                             <Focus className="w-3.5 h-3.5 text-teal-400" />
                             <span>Zoom: {zoomLevel.toFixed(1)}x</span>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsAutoZoom(!isAutoZoom);
-                            }}
-                            className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 backdrop-blur-md border shadow-sm transition cursor-pointer ${
-                              isAutoZoom
-                                ? 'bg-emerald-600/90 text-white border-emerald-400/50 shadow-emerald-900/30'
-                                : 'bg-black/75 text-slate-300 border-white/10 hover:bg-black/90'
-                            }`}
-                          >
-                            <span className={`w-2 h-2 rounded-full ${isAutoZoom ? 'bg-emerald-300 animate-ping' : 'bg-slate-400'}`} />
-                            <span>{isAutoZoom ? 'Auto Zoom: ON' : 'Auto Zoom: OFF'}</span>
-                          </button>
+                          <div className="px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-black/75 text-emerald-300 border border-emerald-500/30 backdrop-blur-md shadow-sm">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Kamera Siap</span>
+                          </div>
                         </div>
 
                         {/* Viewfinder Reticle & Laser */}
@@ -1998,7 +1944,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                           
                           <div className="mt-2.5 text-center px-2">
                             <span className="px-2.5 py-0.5 bg-black/75 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
-                              {isAutoZoom ? '🔍 Auto Zoom aktif mendeteksi barcode...' : 'Arahkan garis merah ke barcode'}
+                              Arahkan Garis Merah ke Garis Barcode
                             </span>
                           </div>
                         </div>
@@ -2011,24 +1957,21 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-1.5 font-bold text-slate-200">
                         <ZoomIn className="w-3.5 h-3.5 text-teal-400" />
-                        <span>Pilihan Zoom Cepat:</span>
+                        <span>Pilihan Zoom Barcode:</span>
                       </div>
-                      <span className="text-[10px] text-teal-300 font-semibold">
-                        {isAutoZoom ? '⚡ Auto Zoom Aktif' : 'Mode Manual'}
+                      <span className="text-[10px] text-teal-300 font-semibold font-mono">
+                        {zoomLevel.toFixed(1)}x
                       </span>
                     </div>
 
-                    {/* Tombol Preset Zoom: 1.0x, 1.5x, 2.2x, 3.0x */}
+                    {/* Tombol Preset Zoom: 1.0x, 1.5x, 2.0x, 3.0x */}
                     <div className="grid grid-cols-4 gap-1.5 text-xs font-bold">
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAutoZoom(false);
-                          applyZoom(1.0);
-                        }}
+                        onClick={() => applyZoom(1.0)}
                         className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
-                          Math.abs(zoomLevel - 1.0) < 0.1 && !isAutoZoom
-                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                          Math.abs(zoomLevel - 1.0) < 0.1
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs ring-1 ring-teal-400'
                             : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-750'
                         }`}
                       >
@@ -2038,13 +1981,10 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAutoZoom(false);
-                          applyZoom(1.5);
-                        }}
+                        onClick={() => applyZoom(1.5)}
                         className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
-                          Math.abs(zoomLevel - 1.5) < 0.1 && !isAutoZoom
-                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                          Math.abs(zoomLevel - 1.5) < 0.1
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs ring-1 ring-teal-400'
                             : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-750'
                         }`}
                       >
@@ -2054,29 +1994,23 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAutoZoom(false);
-                          applyZoom(2.2);
-                        }}
+                        onClick={() => applyZoom(2.0)}
                         className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
-                          Math.abs(zoomLevel - 2.2) < 0.1 && !isAutoZoom
+                          Math.abs(zoomLevel - 2.0) < 0.1
                             ? 'bg-teal-600 text-white border-teal-400 shadow-xs ring-1 ring-teal-400'
                             : 'bg-slate-800/90 text-teal-300 border-teal-800/60 hover:bg-slate-750'
                         }`}
                       >
-                        2.2x ★
+                        2.0x ★
                         <span className="block text-[9px] font-semibold text-teal-400">Kecil</span>
                       </button>
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAutoZoom(false);
-                          applyZoom(3.0);
-                        }}
+                        onClick={() => applyZoom(3.0)}
                         className={`py-2 px-1 rounded-xl text-center transition cursor-pointer border ${
-                          Math.abs(zoomLevel - 3.0) < 0.1 && !isAutoZoom
-                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs'
+                          Math.abs(zoomLevel - 3.0) < 0.1
+                            ? 'bg-teal-600 text-white border-teal-400 shadow-xs ring-1 ring-teal-400'
                             : 'bg-slate-800/90 text-slate-300 border-slate-700 hover:bg-slate-750'
                         }`}
                       >
@@ -2089,10 +2023,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                     <div className="pt-1 flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAutoZoom(false);
-                          applyZoom(Math.max(zoomRange.min, zoomLevel - 0.2));
-                        }}
+                        onClick={() => applyZoom(Math.max(zoomRangeRef.current.min, zoomLevel - 0.2))}
                         className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-300 shrink-0 cursor-pointer"
                         title="Perkecil Zoom"
                       >
@@ -2101,23 +2032,17 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                       <input
                         type="range"
-                        min={zoomRange.min}
-                        max={zoomRange.max}
+                        min={zoomRangeRef.current.min}
+                        max={zoomRangeRef.current.max}
                         step="0.1"
                         value={zoomLevel}
-                        onChange={(e) => {
-                          setIsAutoZoom(false);
-                          applyZoom(parseFloat(e.target.value));
-                        }}
+                        onChange={(e) => applyZoom(parseFloat(e.target.value))}
                         className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-teal-400"
                       />
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setIsAutoZoom(false);
-                          applyZoom(Math.min(zoomRange.max, zoomLevel + 0.2));
-                        }}
+                        onClick={() => applyZoom(Math.min(zoomRangeRef.current.max, zoomLevel + 0.2))}
                         className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-slate-300 shrink-0 cursor-pointer"
                         title="Perbesar Zoom"
                       >
@@ -2133,26 +2058,81 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                   {/* KOTAK SOLUSI & TIPS ANTI-BLUR */}
                   <div className="bg-amber-50/90 border border-amber-200/80 rounded-2xl p-3 text-xs text-amber-900 space-y-1 max-w-sm mx-auto">
                     <div className="font-bold flex items-center gap-1.5 text-amber-950">
-                      <span>💡 Tips Mengatasi Barcode Kecil / Kamera Blur:</span>
+                      <span>💡 Tips Barcode Kecil Agar Tidak Blur:</span>
                     </div>
                     <p className="text-[11px] text-amber-800 leading-relaxed">
-                      Kamera HP tidak bisa fokus jika ditempel terlalu dekat (&lt; 10 cm). Jaga jarak <b>15–20 cm</b> agar kamera tetap tajam, lalu gunakan <b>Auto Zoom</b> atau tekan tombol <b>Zoom 2.2x / 3.0x</b>.
+                      Jaga jarak kamera sekitar <b>15–20 cm</b> (jangan terlalu dekat agar lensa HP tidak blur), lalu pilih <b>Zoom 2.0x / 3.0x</b> agar kode terbaca jernih dan tajam.
                     </p>
                   </div>
 
+                  {/* Pilihan Alternatif Foto / Galeri */}
+                  <div className="flex items-center justify-center gap-2 max-w-sm mx-auto pt-1">
+                    <button
+                      type="button"
+                      onClick={() => qrFallbackCameraInputRef.current?.click()}
+                      className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-teal-600" />
+                      <span>Foto Barcode HP</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => qrFallbackFileInputRef.current?.click()}
+                      className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Unggah File</span>
+                    </button>
+                  </div>
+
+                  {/* Hidden inputs for QR photo scan fallback */}
+                  <input
+                    ref={qrFallbackFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleQrPhotoFileScan}
+                    className="hidden"
+                  />
+                  <input
+                    ref={qrFallbackCameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleQrPhotoFileScan}
+                    className="hidden"
+                  />
+
                   {/* QR scanner error */}
                   {qrError && (
-                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 flex items-start gap-2.5">
-                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
-                      <div>
-                        <div className="font-bold">Kendala Kamera</div>
-                        <div className="mt-0.5">{qrError}</div>
+                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 space-y-2.5 max-w-sm mx-auto">
+                      <div className="flex items-start gap-2.5">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                        <div>
+                          <div className="font-bold">Kendala Akses Kamera</div>
+                          <div className="mt-0.5 leading-relaxed text-[11px]">{qrError}</div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-2 pt-1">
                         <button
                           type="button"
-                          onClick={startQrScanner}
-                          className="mt-2 text-xs font-bold text-teal-700 underline cursor-pointer"
+                          onClick={() => {
+                            setQrError(null);
+                            startQrScanner();
+                          }}
+                          className="w-full py-2 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
                         >
-                          Buka Kamera Lagi
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span>Coba Buka Kamera Langsung Lagi</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => qrFallbackCameraInputRef.current?.click()}
+                          className="w-full py-2 px-3 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                        >
+                          <Camera className="w-3.5 h-3.5 text-teal-600" />
+                          <span>Ambil Foto Barcode (Kamera Bawaan HP)</span>
                         </button>
                       </div>
                     </div>
