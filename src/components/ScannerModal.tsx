@@ -21,12 +21,28 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { Product } from '../types';
 import { formatRupiah } from '../utils/formatters';
 
-interface ScannerModalProps {
+export interface ScannedVoucherData {
+  name: string;
+  category: string;
+  sku?: string;
+  quota?: string;
+  quotaGigabytes?: number;
+  provider?: string;
+  validityDays?: string;
+}
+
+export interface ScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   products: Product[];
-  onSelectProduct: (product: Product) => void;
-  onApplySearchQuery: (query: string) => void;
+  onSelectProduct?: (product: Product) => void;
+  onApplySearchQuery?: (query: string) => void;
+  onScannedBarcode?: (code: string) => void;
+  onScannedVoucherInfo?: (info: ScannedVoucherData) => void;
+  title?: string;
+  subtitle?: string;
+  sourceContext?: 'pos' | 'master_search' | 'master_form';
+  defaultTab?: 'ai_vision' | 'qr_barcode';
 }
 
 interface AiScanResult {
@@ -45,8 +61,26 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   products,
   onSelectProduct,
   onApplySearchQuery,
+  onScannedBarcode,
+  onScannedVoucherInfo,
+  title,
+  subtitle,
+  sourceContext = 'pos',
+  defaultTab,
 }) => {
-  const [activeTab, setActiveTab] = useState<'ai_vision' | 'qr_barcode'>('ai_vision');
+  const [activeTab, setActiveTab] = useState<'ai_vision' | 'qr_barcode'>(
+    defaultTab || (sourceContext === 'master_form' ? 'qr_barcode' : 'ai_vision')
+  );
+
+  useEffect(() => {
+    if (isOpen) {
+      if (defaultTab) {
+        setActiveTab(defaultTab);
+      } else if (sourceContext === 'master_form') {
+        setActiveTab('qr_barcode');
+      }
+    }
+  }, [isOpen, defaultTab, sourceContext]);
 
   // AI Vision states
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -312,9 +346,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
               <ScanLine className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="font-bold text-sm text-slate-100">Scan Kasir Cerdas</h2>
+              <h2 className="font-bold text-sm text-slate-100">
+                {title || (sourceContext === 'master_form' ? 'Scan Barcode / Voucher ke Form Master' : sourceContext === 'master_search' ? 'Scan & Cari di Data Master' : 'Scan Kasir Cerdas')}
+              </h2>
               <p className="text-[11px] text-slate-400">
-                AI Vision Voucher Kuota & Scan Barcode / QR Code
+                {subtitle || (sourceContext === 'master_form' ? 'Arahkan kamera ke barcode fisik atau foto voucher untuk isi form' : 'AI Vision Voucher Kuota & Scan Barcode / QR Code')}
               </p>
             </div>
           </div>
@@ -489,21 +525,79 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Master Form Fill Button for AI Vision */}
+                  {sourceContext === 'master_form' && onScannedVoucherInfo && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const vName = aiResult.productName || `Voucher ${aiResult.provider} ${aiResult.quota}${aiResult.validityDays ? ` (${aiResult.validityDays})` : ''}`.trim();
+                          onScannedVoucherInfo({
+                            name: vName,
+                            category: 'Pulsa',
+                            sku: `VCR-${(aiResult.provider || 'DATA').slice(0, 4).toUpperCase()}${aiResult.quotaGigabytes ? `${aiResult.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
+                            quota: aiResult.quota,
+                            quotaGigabytes: aiResult.quotaGigabytes,
+                            provider: aiResult.provider,
+                            validityDays: aiResult.validityDays,
+                          });
+                          onClose();
+                        }}
+                        className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+                      >
+                        <PackageCheck className="w-4 h-4" />
+                        <span>Gunakan Data Voucher Ini ke Form Master (Nama & Kuota)</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Master Search: Option to add new voucher to Data Master */}
+                  {sourceContext === 'master_search' && onScannedVoucherInfo && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const vName = aiResult.productName || `Voucher ${aiResult.provider} ${aiResult.quota}${aiResult.validityDays ? ` (${aiResult.validityDays})` : ''}`.trim();
+                          onScannedVoucherInfo({
+                            name: vName,
+                            category: 'Pulsa',
+                            sku: `VCR-${(aiResult.provider || 'DATA').slice(0, 4).toUpperCase()}${aiResult.quotaGigabytes ? `${aiResult.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
+                            quota: aiResult.quota,
+                            quotaGigabytes: aiResult.quotaGigabytes,
+                            provider: aiResult.provider,
+                            validityDays: aiResult.validityDays,
+                          });
+                          onClose();
+                        }}
+                        className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+                      >
+                        <Sparkles className="w-4 h-4 text-amber-300" />
+                        <span>+ Daftarkan Sebagai Produk Voucher Baru di Data Master</span>
+                      </button>
+                    </div>
+                  )}
+
                   {/* Search query button */}
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const term = aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`.trim();
-                        onApplySearchQuery(term);
-                        onClose();
-                      }}
-                      className="flex-1 py-2 px-3 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition border border-teal-200"
-                    >
-                      <Search className="w-3.5 h-3.5" />
-                      <span>Cari "{aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`}" di Kasir</span>
-                    </button>
-                  </div>
+                  {onApplySearchQuery && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const term = aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`.trim();
+                          onApplySearchQuery(term);
+                          onClose();
+                        }}
+                        className="flex-1 py-2 px-3 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition border border-teal-200 cursor-pointer"
+                      >
+                        <Search className="w-3.5 h-3.5" />
+                        <span>
+                          {sourceContext.startsWith('master')
+                            ? `Cari "${aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`}" di Data Master`
+                            : `Cari "${aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`}" di Kasir`}
+                        </span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* Matched products from Data Master */}
                   <div className="space-y-2 pt-1">
@@ -517,7 +611,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                       <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2">
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
                         <div>
-                          Belum ada produk di Data Master yang cocok dengan "{aiResult.quota}". Anda dapat menggunakan tombol "Cari di Kasir" di atas atau meminta Admin mendaftarkan produk ini di Data Master.
+                          Belum ada produk di Data Master yang cocok dengan "{aiResult.quota}". Anda dapat menggunakan tombol "{sourceContext.startsWith('master') ? 'Daftarkan Sebagai Produk Baru' : 'Cari di Kasir'}" di atas.
                         </div>
                       </div>
                     ) : (
@@ -538,17 +632,19 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                               <div className="font-extrabold text-xs text-teal-800">
                                 {formatRupiah(prod.price)}
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  onSelectProduct(prod);
-                                  onClose();
-                                }}
-                                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold transition shadow-xs flex items-center gap-1"
-                              >
-                                <PackageCheck className="w-3.5 h-3.5" />
-                                <span>Pilih</span>
-                              </button>
+                              {onSelectProduct && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onSelectProduct(prod);
+                                    onClose();
+                                  }}
+                                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold transition shadow-xs flex items-center gap-1 cursor-pointer"
+                                >
+                                  <PackageCheck className="w-3.5 h-3.5" />
+                                  <span>{sourceContext === 'master_search' ? 'Pilih / Edit' : 'Pilih'}</span>
+                                </button>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -633,6 +729,21 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     {scannedCode}
                   </div>
 
+                  {/* Primary button if inside master form: fill SKU immediately */}
+                  {sourceContext === 'master_form' && onScannedBarcode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onScannedBarcode(scannedCode);
+                        onClose();
+                      }}
+                      className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Gunakan Kode "{scannedCode}" ke Kolom Barcode / SKU</span>
+                    </button>
+                  )}
+
                   {barcodeMatchedProduct ? (
                     <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3.5 flex items-center justify-between gap-3">
                       <div>
@@ -652,12 +763,17 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            onSelectProduct(barcodeMatchedProduct);
-                            onClose();
+                            if (sourceContext === 'master_form' && onScannedBarcode) {
+                              onScannedBarcode(barcodeMatchedProduct.sku || scannedCode);
+                              onClose();
+                            } else if (onSelectProduct) {
+                              onSelectProduct(barcodeMatchedProduct);
+                              onClose();
+                            }
                           }}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs"
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer"
                         >
-                          Pilih Produk
+                          {sourceContext === 'master_search' ? 'Pilih / Edit' : sourceContext === 'master_form' ? 'Gunakan SKU' : 'Pilih Produk'}
                         </button>
                       </div>
                     </div>
@@ -666,19 +782,39 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                       <div className="flex items-start gap-2">
                         <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
                         <div>
-                          Kode <b>"{scannedCode}"</b> belum terdaftar di Data Master (SKU atau Nama Barang). Pastikan produk sudah diinput di menu Data Master oleh Admin.
+                          Kode <b>"{scannedCode}"</b> belum terdaftar di Data Master.
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onApplySearchQuery(scannedCode);
-                          onClose();
-                        }}
-                        className="w-full py-2 bg-white border border-rose-200 hover:bg-rose-100 text-rose-700 font-bold rounded-lg text-xs transition"
-                      >
-                        Gunakan Kode Sebagai Kata Kunci Pencarian
-                      </button>
+
+                      <div className="flex flex-col gap-2 pt-1">
+                        {/* Option to create new master item with this barcode! */}
+                        {onScannedBarcode && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onScannedBarcode(scannedCode);
+                              onClose();
+                            }}
+                            className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+                          >
+                            <PackageCheck className="w-3.5 h-3.5" />
+                            <span>+ Daftarkan Sebagai Barang Baru dengan Kode Ini</span>
+                          </button>
+                        )}
+
+                        {onApplySearchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onApplySearchQuery(scannedCode);
+                              onClose();
+                            }}
+                            className="w-full py-2 bg-white border border-rose-200 hover:bg-rose-100 text-rose-700 font-bold rounded-lg text-xs transition cursor-pointer"
+                          >
+                            Gunakan Kode Sebagai Kata Kunci Pencarian
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

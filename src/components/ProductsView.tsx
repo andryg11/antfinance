@@ -15,7 +15,10 @@ import {
   Save,
   Fuel,
   TrendingUp,
-  AlertTriangle
+  AlertTriangle,
+  Camera,
+  ScanLine,
+  Sparkles
 } from 'lucide-react';
 import { 
   useData, 
@@ -29,6 +32,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { Product, PsRental, AdminFeeTier, AdminRange } from '../types';
 import { formatRupiah, formatNumberWithDots, parseNumberFromDots } from '../utils/formatters';
+import { ScannerModal, ScannedVoucherData } from './ScannerModal';
 
 export const ProductsView: React.FC = () => {
   const { 
@@ -56,6 +60,75 @@ export const ProductsView: React.FC = () => {
   const [modalType, setModalType] = useState<'barang' | 'ppob_range' | 'ps'>('barang');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editingPsUnit, setEditingPsUnit] = useState<PsRental | null>(null);
+
+  // Scanner State for Data Master
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerContext, setScannerContext] = useState<'master_search' | 'master_form'>('master_search');
+  const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+
+  // Scanner handlers for Data Master
+  const handleScannerSelectProduct = (product: Product) => {
+    setSearchQuery(product.name);
+    setScannerFeedback(`Produk "${product.name}" (${product.sku || 'Tanpa SKU'}) terpilih dan difilter di Data Master.`);
+    setTimeout(() => setScannerFeedback(null), 4500);
+  };
+
+  const handleScannerBarcode = (scannedCode: string) => {
+    if (scannerContext === 'master_form') {
+      setBarangForm((prev) => ({ ...prev, sku: scannedCode }));
+      setScannerFeedback(`Kode Barcode/SKU "${scannedCode}" berhasil dimasukkan ke form.`);
+      setTimeout(() => setScannerFeedback(null), 4500);
+    } else {
+      // In master search: open modal to add new product with this barcode prefilled!
+      setBarangForm({
+        name: '',
+        category: 'Sembako',
+        sku: scannedCode,
+        price: 0,
+        cost: 0,
+        stock: 10,
+        minStock: 2,
+        unit: 'Pcs',
+        isFuel: false,
+      });
+      setModalType('barang');
+      setEditingProduct(null);
+      setIsAddModalOpen(true);
+      setScannerFeedback(`Membuka form pendaftaran produk baru dengan kode barcode "${scannedCode}".`);
+      setTimeout(() => setScannerFeedback(null), 4500);
+    }
+  };
+
+  const handleScannerVoucherInfo = (info: ScannedVoucherData) => {
+    if (scannerContext === 'master_form') {
+      setBarangForm((prev) => ({
+        ...prev,
+        name: info.name || prev.name,
+        category: 'Pulsa',
+        sku: info.sku || prev.sku,
+      }));
+      setScannerFeedback(`Informasi voucher "${info.name}" (${info.quota || ''}) dimasukkan ke form.`);
+      setTimeout(() => setScannerFeedback(null), 4500);
+    } else {
+      // Open add product modal pre-filled with voucher data!
+      setBarangForm({
+        name: info.name,
+        category: 'Pulsa',
+        sku: info.sku || `VCR-${Date.now().toString().slice(-4)}`,
+        price: 25000,
+        cost: 22000,
+        stock: 50,
+        minStock: 5,
+        unit: 'Pcs',
+        isFuel: false,
+      });
+      setModalType('barang');
+      setEditingProduct(null);
+      setIsAddModalOpen(true);
+      setScannerFeedback(`Membuka form pendaftaran voucher baru "${info.name}".`);
+      setTimeout(() => setScannerFeedback(null), 4500);
+    }
+  };
 
   // Form State: Barang & Pulsa
   const [barangForm, setBarangForm] = useState({
@@ -368,6 +441,19 @@ export const ProductsView: React.FC = () => {
 
         {/* Quick Add Buttons */}
         <div className="flex flex-wrap gap-2">
+          {/* Scan Barcode & Voucher button in Data Master */}
+          <button
+            onClick={() => {
+              setScannerContext('master_search');
+              setIsScannerOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+            title="Scan Barcode produk atau Voucher Kuota dengan Kamera HP"
+          >
+            <ScanLine className="w-4 h-4" />
+            <span>Scan Barcode / Voucher</span>
+          </button>
+
           <button
             onClick={() => handleOpenAdd('barang')}
             className="flex items-center gap-1.5 px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
@@ -402,6 +488,22 @@ export const ProductsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Scanner notification banner if active */}
+      {scannerFeedback && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3.5 rounded-2xl text-xs flex items-center justify-between shadow-xs animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{scannerFeedback}</span>
+          </div>
+          <button
+            onClick={() => setScannerFeedback(null)}
+            className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Tabs Filter Bar */}
       <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5 text-xs">
@@ -430,15 +532,44 @@ export const ProductsView: React.FC = () => {
           })}
         </div>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-          <input
-            type="text"
-            placeholder="Cari data master..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full sm:w-60 pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-teal-500"
-          />
+        {/* Search Bar with Scan Button parallel (consistent with Kasir) */}
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <div className="relative flex-1 sm:w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+            <input
+              type="text"
+              placeholder="Cari data master (nama, SKU)..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-teal-500"
+            />
+            {/* Shortcut camera inside search bar */}
+            <button
+              type="button"
+              onClick={() => {
+                setScannerContext('master_search');
+                setIsScannerOpen(true);
+              }}
+              title="Buka kamera untuk scan Barcode atau Voucher"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-teal-600 transition p-1 cursor-pointer"
+            >
+              <Camera className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setScannerContext('master_search');
+              setIsScannerOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-xs whitespace-nowrap cursor-pointer shrink-0"
+            title="Scan Barcode produk atau Voucher Kuota dengan Kamera HP"
+          >
+            <ScanLine className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Scan (Kamera & AI)</span>
+            <span className="sm:hidden">Scan</span>
+          </button>
         </div>
       </div>
 
@@ -827,14 +958,41 @@ export const ProductsView: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-slate-600 font-medium mb-1">Kode Barcode / SKU / QR</label>
-                    <input
-                      type="text"
-                      placeholder="Contoh: 89910010010 atau PLS-10"
-                      value={barangForm.sku}
-                      onChange={(e) => setBarangForm({ ...barangForm, sku: e.target.value })}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-mono"
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-600 font-medium">Kode Barcode / SKU / QR</label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerContext('master_form');
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-teal-700 hover:text-teal-900 flex items-center gap-1 hover:underline cursor-pointer"
+                        title="Scan Barcode fisik atau Voucher Kuota dengan kamera hp"
+                      >
+                        <ScanLine className="w-3 h-3 text-teal-600" />
+                        <span>Scan Kamera HP</span>
+                      </button>
+                    </div>
+                    <div className="relative flex items-center">
+                      <input
+                        type="text"
+                        placeholder="Contoh: 89910010010 atau PLS-10"
+                        value={barangForm.sku}
+                        onChange={(e) => setBarangForm({ ...barangForm, sku: e.target.value })}
+                        className="w-full pl-3 pr-10 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-mono text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerContext('master_form');
+                          setIsScannerOpen(true);
+                        }}
+                        title="Buka Kamera untuk scan Barcode atau Voucher"
+                        className="absolute right-2 p-1.5 text-slate-400 hover:text-teal-600 transition rounded-lg hover:bg-slate-200/60 cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -1241,6 +1399,28 @@ export const ProductsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Scanner Modal for Data Master (AI Vision Voucher & Barcode / QR) */}
+      <ScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        products={products}
+        sourceContext={scannerContext}
+        title={scannerContext === 'master_form' ? 'Scan Barcode / Voucher ke Form Master' : 'Scan & Cari di Data Master'}
+        subtitle={
+          scannerContext === 'master_form'
+            ? 'Arahkan kamera ke barcode produk atau foto voucher untuk otomatis mengisi form'
+            : 'Scan barcode produk fisik atau voucher kuota untuk mengecek dan mengelola di Data Master'
+        }
+        onSelectProduct={handleScannerSelectProduct}
+        onApplySearchQuery={(q) => {
+          setSearchQuery(q);
+          setScannerFeedback(`Memfilter data master dengan pencarian: "${q}"`);
+          setTimeout(() => setScannerFeedback(null), 4000);
+        }}
+        onScannedBarcode={handleScannerBarcode}
+        onScannedVoucherInfo={handleScannerVoucherInfo}
+      />
     </div>
   );
 };
