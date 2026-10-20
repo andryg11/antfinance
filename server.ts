@@ -7,6 +7,9 @@ import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
 
+// Ensure Vite HMR is disabled in cloud container proxy environment
+process.env.DISABLE_HMR = 'true';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -48,23 +51,42 @@ async function startServer() {
       // Clean base64 string if it contains data URI prefix
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
-      const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang sangat ahli dan teliti dalam membaca fisik voucher kuota internet, kartu perdana, atau brosur paket data.
-Tugas Anda adalah menganalisis gambar voucher/kartu perdana ini dan menemukan:
-1. Total Kuota atau Gigabyte (GB / MB) yang tertera jelas pada gambar (contoh: "10 GB", "15 GB", "3 GB", "24 GB", "50 GB", dsb).
-2. Nama Provider operator telekomunikasi (contoh: "Telkomsel", "Indosat" / "IM3", "XL", "Axis", "Tri" / "3", "Smartfren").
-3. Masa aktif jika ada (contoh: "30 Hari", "7 Hari", "14 Hari").
-4. Kategori/Jenis (contoh: "Voucher Fisik", "Perdana Kuota", "Aigo", "Freedom", "Maxstream", dsb).
-5. Kata kunci pencarian terbaik untuk kasir menemukan produk ini di data master (contoh: "Indosat 10 GB" atau "Telkomsel 15 GB").
+      const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang sangat ahli dan teliti dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label voucher konter.
+Tugas Anda adalah menganalisis gambar voucher/kartu perdana/catatan konter ini dan mengekstrak data berikut secara cerdas:
+
+1. OPERATOR / PROVIDER:
+   - Kenali nama provider dari logo, tulisan resmi, maupun singkatan/tulisan tangan:
+     * "Tri" / "3" / "Three"
+     * "Telkomsel" / "Tsel" / "Simpati" / "AS" / "by.U"
+     * "Indosat" / "IM3" / "Ooredoo"
+     * "XL" / "XL Axiata"
+     * "Axis" / "Aigo"
+     * "Smartfren" / "SF"
+
+2. KUOTA & MASA AKTIF (Termasuk Notasi Singkatan Konter Pulsa Indonesia):
+   - Di konter pulsa Indonesia, penjual sering menuliskan singkatan spidol/label seperti "tri 3/5" atau "3/5", "1.5/3", "2/5", "5/7", "10/30".
+     * Pola angka "X/Y" seperti "3/5" ARTINYA: X = Kuota GB (contoh 3 GB), dan Y = Masa Aktif Hari (contoh 5 Hari). Jadi "tri 3/5" = Provider Tri, Kuota 3 GB, Masa aktif 5 Hari!
+     * Pola lain: "3gb 5hr", "2gb 3d", "10gb 30h", dsb.
+   - Bila voucher mencantumkan kuota cetak (misal "Total Kuota 10 GB 30 Hari"), ambil kuota dan masa aktif tersebut.
+   - Bila terdapat catatan tulisan tangan/spidol/label konter DAN juga tulisan cetak, pahami maksudnya secara utuh.
+
+3. NAMA PRODUK & KATA KUNCI PENCARIAN:
+   - Buat nama produk yang rapi dan terstandarisasi untuk data master kasir, contoh:
+     * "Voucher Tri 3 GB (5 Hari)"
+     * "Voucher Indosat 10 GB (30 Hari)"
+     * "Voucher Axis Aigo 2 GB (3 Hari)"
+     * "Voucher Telkomsel 15 GB (30 Hari)"
+   - Sediakan "searchKeyword" singkat untuk memudahkan pencarian di Data Master kasir (contoh: "Tri 3 GB" atau "Indosat 10 GB").
 
 Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 {
-  "provider": "Nama Provider (misal Indosat Ooredoo / Telkomsel / XL / Axis / Tri / Smartfren)",
-  "quota": "Angka dan satuan kuota (misal '10 GB' atau '15 GB' atau '3 GB')",
-  "quotaGigabytes": 10,
-  "validityDays": "30 Hari",
-  "productName": "Nama paket voucher yang tertera",
-  "searchKeyword": "Kata kunci pencarian singkat (misal 'Indosat 10 GB')",
-  "detectedText": "Ringkasan tulisan penting yang terbaca"
+  "provider": "Nama Provider (misal: Tri / Indosat / Telkomsel / Axis / XL / Smartfren)",
+  "quota": "Angka dan satuan kuota (misal: '3 GB' atau '10 GB')",
+  "quotaGigabytes": 3,
+  "validityDays": "5 Hari",
+  "productName": "Voucher Tri 3 GB (5 Hari)",
+  "searchKeyword": "Tri 3 GB",
+  "detectedText": "Ringkasan tulisan atau catatan yang terbaca pada gambar"
 }`;
 
       const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
@@ -166,7 +188,10 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
     });
   } else {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

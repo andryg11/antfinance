@@ -400,12 +400,20 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           {activeTab === 'ai_vision' && (
             <div className="space-y-4">
               {/* Instructions banner */}
-              <div className="bg-teal-50/80 border border-teal-200/60 rounded-2xl p-3.5 flex items-start gap-3">
-                <div className="w-7 h-7 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 mt-0.5">
-                  <Wifi className="w-4 h-4" />
+              <div className="bg-teal-50/80 border border-teal-200/60 rounded-2xl p-3.5 space-y-2">
+                <div className="flex items-start gap-3">
+                  <div className="w-7 h-7 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                    <Wifi className="w-4 h-4" />
+                  </div>
+                  <div className="text-xs text-teal-900 leading-relaxed">
+                    <span className="font-bold">Scan Voucher Kuota Otomatis:</span> Foto voucher fisik atau kartu perdana. AI Vision akan otomatis membaca <span className="font-bold underline">provider, kuota (GB), dan masa aktif</span>.
+                  </div>
                 </div>
-                <div className="text-xs text-teal-900 leading-relaxed">
-                  <span className="font-bold">Scan Voucher Kuota Otomatis:</span> Arahkan kamera hp ke voucher kuota internet atau kartu perdana. AI Vision akan otomatis membaca <span className="font-bold underline">berapa Gigabyte (GB)</span> dan nama provider operatornya.
+                <div className="text-[11px] bg-white/80 rounded-xl p-2 text-slate-600 border border-teal-100 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span>
+                    <strong>Mendukung Catatan Konter:</strong> AI mengenali singkatan spidol seperti <code className="bg-slate-100 px-1 py-0.5 rounded text-teal-800 font-bold">tri 3/5</code> (artinya 3 GB 5 Hari) atau <code className="bg-slate-100 px-1 py-0.5 rounded text-teal-800 font-bold">axis 2/3</code>!
+                  </span>
                 </div>
               </div>
 

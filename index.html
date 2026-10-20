@@ -15,6 +15,72 @@
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="/logo.jpg" />
+    <script>
+      (function() {
+        // AI Studio Dev Environment: HMR WebSocket is disabled in preview proxy.
+        // Intercept Vite HMR WebSocket to prevent 'WebSocket closed without opened' unhandled rejection.
+        var NativeWebSocket = window.WebSocket;
+        if (typeof NativeWebSocket !== 'undefined') {
+          window.WebSocket = function(url, protocols) {
+            var isViteHmr = false;
+            if (protocols === 'vite-hmr' || (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1)) {
+              isViteHmr = true;
+            } else if (typeof url === 'string' && (url.indexOf('vite') !== -1 || url.indexOf('@vite/client') !== -1)) {
+              isViteHmr = true;
+            }
+
+            if (isViteHmr) {
+              var listeners = {};
+              var stub = {
+                url: url,
+                readyState: 1, // OPEN
+                CONNECTING: 0,
+                OPEN: 1,
+                CLOSING: 2,
+                CLOSED: 3,
+                addEventListener: function(type, fn) {
+                  listeners[type] = listeners[type] || [];
+                  listeners[type].push(fn);
+                  if (type === 'open') {
+                    setTimeout(function() {
+                      try { fn({ type: 'open', target: stub }); } catch (e) {}
+                    }, 0);
+                  }
+                },
+                removeEventListener: function(type, fn) {
+                  if (listeners[type]) {
+                    listeners[type] = listeners[type].filter(function(f) { return f !== fn; });
+                  }
+                },
+                dispatchEvent: function() { return true; },
+                send: function() {},
+                close: function() {
+                  stub.readyState = 3;
+                }
+              };
+              return stub;
+            }
+
+            return new NativeWebSocket(url, protocols);
+          };
+          window.WebSocket.prototype = NativeWebSocket.prototype;
+        }
+
+        // Suppress any stray WebSocket rejections from showing as unhandled rejections
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && event.reason;
+          var msg = (reason && (reason.message || reason.stack)) || String(reason || '');
+          if (
+            msg.indexOf('WebSocket') !== -1 ||
+            msg.indexOf('@vite/client') !== -1 ||
+            msg.indexOf('closed without opened') !== -1
+          ) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
