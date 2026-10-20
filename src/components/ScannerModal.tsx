@@ -24,7 +24,9 @@ import {
   ZoomOut,
   Focus,
   Zap,
-  Flashlight
+  Flashlight,
+  Barcode as BarcodeIcon,
+  Sliders
 } from 'lucide-react';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { GoogleGenAI } from '@google/genai';
@@ -33,6 +35,8 @@ import { useData } from '../context/DataContext';
 import { uploadToCloudinary } from '../utils/cloudinary';
 import { compressImage } from '../utils/imageCompressor';
 import { formatRupiah } from '../utils/formatters';
+import { Barcode1D } from './Barcode1D';
+import { generateEan13, generateCode128 } from '../utils/barcodeUtils';
 
 const PRODUCT_CATEGORIES = [
   'Sembako',
@@ -162,6 +166,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [qrError, setQrError] = useState<string | null>(null);
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [barcodeMatchedProduct, setBarcodeMatchedProduct] = useState<Product | null>(null);
+  const [barcodeFilterMode, setBarcodeFilterMode] = useState<'all' | '1d' | 'qr'>('all');
+  const [manualBarcodeInput, setManualBarcodeInput] = useState<string>('');
 
   // Auto Zoom & Camera Focus states for Barcode / QR (mengatasi barcode kecil & kamera blur)
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
@@ -188,7 +194,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const cardPhotoCameraInputRef = useRef<HTMLInputElement>(null);
   const qrReaderRef = useRef<Html5Qrcode | null>(null);
 
-  // Audio confirmation beep
+  // Audio confirmation beep + haptic vibration
   const playBeep = () => {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -197,13 +203,18 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.type = 'sine';
-        osc.frequency.setValueAtTime(920, ctx.currentTime);
-        gain.gain.setValueAtTime(0.2, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+        osc.frequency.setValueAtTime(1050, ctx.currentTime);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.start();
-        osc.stop(ctx.currentTime + 0.15);
+        osc.stop(ctx.currentTime + 0.14);
+      }
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        try {
+          navigator.vibrate([60, 40, 60]);
+        } catch {}
       }
     } catch {
       // Audio might fail if blocked by browser policy
@@ -362,6 +373,12 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         (p.sku && p.sku.replace(/\s+/g, '') === normalizedCode.replace(/\s+/g, ''))
     );
 
+    if (onScannedBarcode && sourceContext === 'master_form') {
+      onScannedBarcode(cleanCode);
+      onClose();
+      return;
+    }
+
     if (matched) {
       setBarcodeMatchedProduct(matched);
       setCardVoucherForm(null);
@@ -387,7 +404,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         isBarcodeItem: true,
       });
     }
-  }, [products, onSelectProduct, sourceContext, onClose, stopQrScanner]);
+  }, [products, onSelectProduct, onScannedBarcode, sourceContext, onClose, stopQrScanner]);
 
   // Toggle camera flashlight (torch)
   const toggleTorch = useCallback(async () => {
@@ -436,18 +453,22 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           qrReaderRef.current = null;
         }
 
-        // Support all standard 1D Barcode & 2D QR formats
+        // Support ALL standard 1D Barcode Batang (Linear) & 2D QR formats
         const formatsToSupport = [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8,
           Html5QrcodeSupportedFormats.CODE_128,
           Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
           Html5QrcodeSupportedFormats.UPC_A,
           Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION,
           Html5QrcodeSupportedFormats.CODABAR,
           Html5QrcodeSupportedFormats.ITF,
           Html5QrcodeSupportedFormats.QR_CODE,
           Html5QrcodeSupportedFormats.DATA_MATRIX,
+          Html5QrcodeSupportedFormats.AZTEC,
+          Html5QrcodeSupportedFormats.PDF_417,
         ];
 
         const html5QrCode = new Html5Qrcode('qr-reader-container', {
@@ -459,22 +480,21 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         });
         qrReaderRef.current = html5QrCode;
 
-        // Use high definition resolution (1080p / 720p) so thin barcode lines are razor sharp!
+        // Ideal widescreen 720p (sharp lines, no overconstrained error, wide margin for 1D barcodes)
         await html5QrCode.start(
           {
             facingMode: 'environment',
-            width: { min: 1280, ideal: 1920, max: 2560 },
-            height: { min: 720, ideal: 1080, max: 1440 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
           },
           {
-            fps: 25,
+            fps: 12, // Smooth, non-blocking 12 FPS optimal for JS & native barcode decoding
             qrbox: (viewfinderWidth, viewfinderHeight) => {
-              // Generous box so barcode is captured anywhere in view
-              const width = Math.min(Math.floor(viewfinderWidth * 0.95), 450);
-              const height = Math.min(Math.floor(viewfinderHeight * 0.85), 320);
-              return { width: Math.max(width, 240), height: Math.max(height, 180) };
+              // Wide horizontal rectangular scan window designed for 1D Barcode Batang & QR
+              const width = Math.min(Math.floor(viewfinderWidth * 0.96), 540);
+              const height = Math.min(Math.floor(viewfinderHeight * 0.8), 280);
+              return { width: Math.max(width, 260), height: Math.max(height, 160) };
             },
-            aspectRatio: 1.0,
             disableFlip: true,
           },
           (decodedText) => {
@@ -488,7 +508,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         isQrScanningActiveRef.current = true;
 
         // Detect video track, torch, zoom capabilities
-        setTimeout(() => {
+        setTimeout(async () => {
           const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
           if (videoEl && videoEl.srcObject) {
             const stream = videoEl.srcObject as MediaStream;
@@ -510,16 +530,48 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
             }
           }
 
-          // Native Android BarcodeDetector parallel engine for instant recognition
+          // Hardware-accelerated BarcodeDetector (Android Chrome / Chromium) with EXPLICIT 1D formats
           if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
             try {
               const BarcodeDetectorClass = (window as any).BarcodeDetector;
-              const nativeDetector = new BarcodeDetectorClass();
+              let supportedFormats: string[] = [];
+              if (typeof BarcodeDetectorClass.getSupportedFormats === 'function') {
+                try {
+                  supportedFormats = await BarcodeDetectorClass.getSupportedFormats();
+                } catch {
+                  // ignore
+                }
+              }
+
+              const desiredFormats = [
+                'code_128',
+                'code_39',
+                'code_93',
+                'codabar',
+                'ean_13',
+                'ean_8',
+                'itf',
+                'upc_a',
+                'upc_e',
+                'qr_code',
+                'data_matrix',
+                'aztec',
+                'pdf417',
+              ];
+
+              const targetFormats = supportedFormats && supportedFormats.length > 0
+                ? desiredFormats.filter((fmt) => supportedFormats.includes(fmt))
+                : desiredFormats;
+
+              const nativeDetector = new BarcodeDetectorClass({
+                formats: targetFormats.length > 0 ? targetFormats : desiredFormats,
+              });
 
               if (nativeScanTimerRef.current) {
                 clearInterval(nativeScanTimerRef.current);
               }
 
+              // Rapid 60ms detection loop on native video stream
               nativeScanTimerRef.current = setInterval(async () => {
                 if (!isQrScanningActiveRef.current) return;
                 const v = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
@@ -533,28 +585,28 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                     // skip frame
                   }
                 }
-              }, 75);
+              }, 60);
             } catch (err) {
-              console.warn('Native BarcodeDetector not enabled:', err);
+              console.warn('Native BarcodeDetector initialization warning:', err);
             }
           }
-        }, 250);
+        }, 200);
 
       } catch (err: any) {
-        console.warn('Failed to start QR code reader:', err);
+        console.warn('Failed to start QR/Barcode reader:', err);
         isStartingQrRef.current = false;
         setIsQrScanning(false);
 
         if (err?.name === 'NotAllowedError' || String(err).toLowerCase().includes('permission denied')) {
-          setQrError('Izin akses kamera ditolak oleh browser. Silakan izinkan akses kamera di setelan browser Anda, atau gunakan tombol "Ambil Foto Barcode" di bawah.');
+          setQrError('Izin akses kamera ditolak oleh browser. Silakan izinkan akses kamera di setelan browser Anda, atau gunakan tombol "Foto Barcode HP" di bawah.');
         } else {
-          setQrError('Tidak dapat membuka kamera untuk barcode/QR. Anda bisa mencoba lagi atau menggunakan tombol kamera sistem HP di bawah.');
+          setQrError('Tidak dapat membuka kamera untuk barcode/QR. Pastikan browser mendukung kamera, atau gunakan tombol "Ambil Foto Barcode Bawaan HP" di bawah.');
         }
       }
     }, 150);
   }, [handleBarcodeScanned]);
 
-  // Instant manual snapshot scan for tough, shiny, or faded barcodes
+  // Instant high-contrast snapshot scan for tough, shiny, or faded barcodes
   const handleManualScanSnapshot = async () => {
     const videoEl = document.querySelector('#qr-reader-container video') as HTMLVideoElement | null;
     if (!videoEl || videoEl.readyState < 2) {
@@ -569,23 +621,66 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
+      // Draw original frame
       ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
 
-      // 1. Try native BarcodeDetector on high-res canvas
+      const barcodeFormats = [
+        'code_128',
+        'code_39',
+        'code_93',
+        'codabar',
+        'ean_13',
+        'ean_8',
+        'itf',
+        'upc_a',
+        'upc_e',
+        'qr_code',
+        'data_matrix',
+        'aztec',
+        'pdf417',
+      ];
+
+      // 1. Try native BarcodeDetector on original high-res canvas
       if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
         try {
-          const detector = new (window as any).BarcodeDetector();
+          const detector = new (window as any).BarcodeDetector({ formats: barcodeFormats });
           const hits = await detector.detect(canvas);
           if (hits && hits.length > 0 && hits[0]?.rawValue) {
             handleBarcodeScanned(hits[0].rawValue);
             return;
           }
         } catch {
-          // ignore
+          // continue to next pass
         }
       }
 
-      // 2. Try Html5Qrcode on high-res canvas blob
+      // 2. High-contrast sharpening pass (binarization for glossy/shiny packaging)
+      try {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const avg = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+          // High contrast thresholding to make barcode lines deep black and background pure white
+          const val = avg > 120 ? 255 : 0;
+          d[i] = val;
+          d[i + 1] = val;
+          d[i + 2] = val;
+        }
+        ctx.putImageData(imgData, 0, 0);
+
+        if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+          const detector = new (window as any).BarcodeDetector({ formats: barcodeFormats });
+          const hits = await detector.detect(canvas);
+          if (hits && hits.length > 0 && hits[0]?.rawValue) {
+            handleBarcodeScanned(hits[0].rawValue);
+            return;
+          }
+        }
+      } catch {
+        // continue
+      }
+
+      // 3. Try Html5Qrcode scan on canvas blob
       canvas.toBlob(async (blob) => {
         if (!blob) return;
         const file = new File([blob], 'snap.jpg', { type: 'image/jpeg' });
@@ -596,12 +691,16 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
               Html5QrcodeSupportedFormats.EAN_8,
               Html5QrcodeSupportedFormats.CODE_128,
               Html5QrcodeSupportedFormats.CODE_39,
+              Html5QrcodeSupportedFormats.CODE_93,
               Html5QrcodeSupportedFormats.UPC_A,
               Html5QrcodeSupportedFormats.UPC_E,
+              Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION,
               Html5QrcodeSupportedFormats.CODABAR,
               Html5QrcodeSupportedFormats.ITF,
               Html5QrcodeSupportedFormats.QR_CODE,
               Html5QrcodeSupportedFormats.DATA_MATRIX,
+              Html5QrcodeSupportedFormats.AZTEC,
+              Html5QrcodeSupportedFormats.PDF_417,
             ],
             verbose: false,
           });
@@ -626,17 +725,54 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     if (!file) return;
 
     try {
+      // 1. Try native BarcodeDetector on ImageBitmap (fastest & highly accurate)
+      if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+        try {
+          const bitmap = await createImageBitmap(file);
+          const detector = new (window as any).BarcodeDetector({
+            formats: [
+              'code_128',
+              'code_39',
+              'code_93',
+              'codabar',
+              'ean_13',
+              'ean_8',
+              'itf',
+              'upc_a',
+              'upc_e',
+              'qr_code',
+              'data_matrix',
+              'aztec',
+              'pdf417',
+            ],
+          });
+          const hits = await detector.detect(bitmap);
+          if (hits && hits.length > 0 && hits[0]?.rawValue) {
+            handleBarcodeScanned(hits[0].rawValue);
+            return;
+          }
+        } catch {
+          // fallback to Html5Qrcode
+        }
+      }
+
+      // 2. Fallback to Html5Qrcode.scanFile
       const html5QrCode = new Html5Qrcode('qr-reader-container', {
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8,
           Html5QrcodeSupportedFormats.CODE_128,
           Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.CODE_93,
           Html5QrcodeSupportedFormats.UPC_A,
           Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.UPC_EAN_EXTENSION,
           Html5QrcodeSupportedFormats.CODABAR,
           Html5QrcodeSupportedFormats.ITF,
           Html5QrcodeSupportedFormats.QR_CODE,
+          Html5QrcodeSupportedFormats.DATA_MATRIX,
+          Html5QrcodeSupportedFormats.AZTEC,
+          Html5QrcodeSupportedFormats.PDF_417,
         ],
         verbose: false,
       });
@@ -647,7 +783,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       }
     } catch (scanErr) {
       console.warn('Barcode not found in photo:', scanErr);
-      alert('Barcode tidak terbaca dari foto tersebut. Pastikan foto terang, jelas, dan garis barcode tidak terpotong.');
+      alert('Barcode belum terbaca dari foto tersebut. Pastikan foto terang, jelas, dan garis barcode tidak terpotong.');
     }
   };
 
@@ -1322,6 +1458,20 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                       <span className="font-bold text-slate-900 text-xs sm:text-sm">{barcodeMatchedProduct.stock} {barcodeMatchedProduct.unit || 'Pcs'}</span>
                     </div>
                   </div>
+
+                  {/* Render Visual Barcode Batang 1D */}
+                  <div className="p-2 bg-white rounded-xl border border-slate-200 flex flex-col items-center justify-center pt-2">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                      Barcode Batang (1D Linear)
+                    </span>
+                    <Barcode1D
+                      value={barcodeMatchedProduct.sku || scannedCode || barcodeMatchedProduct.id}
+                      width={1.6}
+                      height={40}
+                      fontSize={11}
+                      displayValue={true}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1609,31 +1759,64 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
               {/* Barcode & Kategori */}
               {cardVoucherForm.isBarcodeItem ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Kode Barcode (SKU)
-                    </label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={cardVoucherForm.sku}
-                      className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl font-mono font-bold text-slate-700 text-xs"
-                    />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-bold text-slate-700">
+                          Kode Barcode (SKU)
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newEan = generateEan13();
+                            setCardVoucherForm({ ...cardVoucherForm, sku: newEan });
+                          }}
+                          className="text-[10px] text-teal-700 hover:text-teal-900 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                          title="Generate Barcode Batang Standar EAN-13 Baru"
+                        >
+                          <Zap className="w-2.5 h-2.5 text-teal-600" />
+                          <span>Generate Baru</span>
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={cardVoucherForm.sku}
+                        onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, sku: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-slate-800 text-xs focus:ring-1 focus:ring-teal-500"
+                        placeholder="Kode Barcode..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Kategori Produk *
+                      </label>
+                      <select
+                        value={cardVoucherForm.category}
+                        onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, category: e.target.value })}
+                        className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs focus:ring-1 focus:ring-teal-500"
+                      >
+                        {PRODUCT_CATEGORIES.map((c) => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Kategori Produk *
-                    </label>
-                    <select
-                      value={cardVoucherForm.category}
-                      onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, category: e.target.value })}
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
-                    >
-                      {PRODUCT_CATEGORIES.map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
+
+                  {/* Render Visual Barcode Batang 1D Asli */}
+                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col items-center justify-center space-y-1">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                      Preview Barcode Batang (1D Linear)
+                    </span>
+                    <div className="bg-white p-2 rounded-xl border border-slate-200 flex items-center justify-center max-w-full overflow-hidden shadow-2xs">
+                      <Barcode1D
+                        value={cardVoucherForm.sku}
+                        width={1.8}
+                        height={46}
+                        fontSize={12}
+                        displayValue={true}
+                      />
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -2039,13 +2222,52 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
               {/* TAB 2: QR CODE & BARCODE SCANNER */}
               {activeTab === 'qr_barcode' && (
-                <div className="space-y-4">
-                  <div className="bg-blue-50/80 border border-blue-200/60 rounded-2xl p-3 flex items-start gap-3">
-                    <div className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                <div className="space-y-3.5">
+                  {/* Mode Selector Barcode & QR */}
+                  <div className="flex bg-slate-100 p-1 rounded-2xl max-w-sm mx-auto text-xs font-bold gap-1 shadow-inner">
+                    <button
+                      type="button"
+                      onClick={() => setBarcodeFilterMode('all')}
+                      className={`flex-1 py-1.5 px-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                        barcodeFilterMode === 'all'
+                          ? 'bg-white text-teal-800 shadow-2xs font-extrabold'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <span>🌟 Semua Format</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBarcodeFilterMode('1d')}
+                      className={`flex-1 py-1.5 px-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                        barcodeFilterMode === '1d'
+                          ? 'bg-teal-600 text-white shadow-2xs font-extrabold'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <BarcodeIcon className="w-3.5 h-3.5" />
+                      <span>Barcode Batang (1D)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBarcodeFilterMode('qr')}
+                      className={`flex-1 py-1.5 px-2 rounded-xl transition cursor-pointer flex items-center justify-center gap-1.5 ${
+                        barcodeFilterMode === 'qr'
+                          ? 'bg-blue-600 text-white shadow-2xs font-extrabold'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
                       <QrCode className="w-3.5 h-3.5" />
+                      <span>QR Code (2D)</span>
+                    </button>
+                  </div>
+
+                  <div className="bg-blue-50/80 border border-blue-200/60 rounded-2xl p-2.5 flex items-start gap-2.5 max-w-sm mx-auto">
+                    <div className="w-5 h-5 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                      <BarcodeIcon className="w-3 h-3" />
                     </div>
-                    <div className="text-xs text-blue-900 leading-relaxed">
-                      <span className="font-bold">Scan Barcode / QR Code:</span> Arahkan kamera ke barcode produk fisik atau kemasan. Sistem akan langsung membaca dan mendeteksi barcode secara instan.
+                    <div className="text-[11px] text-teal-950 leading-relaxed">
+                      <span className="font-bold">Scan Instan Sensitif:</span> Arahkan garis laser merah menyilang batang barcode atau kotak QR.
                     </div>
                   </div>
 
@@ -2085,24 +2307,41 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                             <div className="px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 bg-black/75 text-emerald-300 border border-emerald-500/30 backdrop-blur-md shadow-sm">
                               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                              <span>Sensitif</span>
+                              <span>Sensitif 1D+QR</span>
                             </div>
                           </div>
                         </div>
 
-                        {/* Viewfinder Reticle & Laser */}
+                        {/* Viewfinder Reticle & Sweeping Laser Line */}
                         <div className="absolute inset-0 pointer-events-none flex flex-col justify-center items-center">
-                          <div className="w-64 h-36 border-2 border-teal-400/90 rounded-2xl relative shadow-[0_0_15px_rgba(20,184,166,0.3)]">
-                            <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
-                            <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
-                            <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
-                            <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
-                            <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-pulse mt-18" />
+                          <style>{`
+                            @keyframes sweepLaserLine {
+                              0% { transform: translateY(12px); opacity: 0.85; }
+                              50% { transform: translateY(120px); opacity: 1; }
+                              100% { transform: translateY(12px); opacity: 0.85; }
+                            }
+                          `}</style>
+                          <div className={`border-2 border-teal-400/90 rounded-2xl relative shadow-[0_0_18px_rgba(20,184,166,0.35)] overflow-hidden ${
+                            barcodeFilterMode === 'qr' ? 'w-52 h-52' : 'w-72 sm:w-80 h-36'
+                          }`}>
+                            {/* Sweeping Laser Line khas Scanner Kasir */}
+                            <div 
+                              className="absolute top-0 inset-x-0 h-0.5 bg-red-500 shadow-[0_0_12px_#ef4444]" 
+                              style={{ animation: 'sweepLaserLine 1.8s ease-in-out infinite' }} 
+                            />
+                            
+                            {/* Corner brackets */}
+                            <div className="absolute top-0 left-0 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
+                            <div className="absolute top-0 right-0 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
+                            <div className="absolute bottom-0 left-0 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
+                            <div className="absolute bottom-0 right-0 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
                           </div>
                           
                           <div className="mt-2.5 text-center px-2">
                             <span className="px-2.5 py-0.5 bg-black/75 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
-                              Arahkan Garis Merah ke Garis Barcode
+                              {barcodeFilterMode === 'qr' 
+                                ? 'Arahkan Kotak ke QR Code' 
+                                : 'Arahkan Garis Laser Merah Menyilang Batang Barcode'}
                             </span>
                           </div>
                         </div>
@@ -2120,6 +2359,41 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                       <Zap className="w-4 h-4 text-amber-300 fill-amber-300" />
                       <span>⚡ Jepret & Scan Barcode Sekarang</span>
                     </button>
+                  </div>
+
+                  {/* KETIK BARCODE MANUAL BILA FISIK KEMASAN RUSAK / SOBEK */}
+                  <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-2xl max-w-sm mx-auto space-y-1.5 text-left shadow-2xs">
+                    <div className="flex items-center justify-between text-xs font-bold text-slate-700">
+                      <span className="flex items-center gap-1.5">
+                        <BarcodeIcon className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Ketik Barcode Manual:</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-normal">Jika kemasan pudar / sobek</span>
+                    </div>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (manualBarcodeInput.trim()) {
+                          handleBarcodeScanned(manualBarcodeInput.trim());
+                        }
+                      }}
+                      className="flex gap-2"
+                    >
+                      <input
+                        type="text"
+                        value={manualBarcodeInput}
+                        onChange={(e) => setManualBarcodeInput(e.target.value)}
+                        placeholder="Ketik angka barcode (misal: 899...)"
+                        className="flex-1 px-3 py-1.5 bg-white border border-slate-300 rounded-xl font-mono text-xs focus:ring-1 focus:ring-teal-500 text-slate-800"
+                      />
+                      <button
+                        type="submit"
+                        disabled={!manualBarcodeInput.trim()}
+                        className="px-3.5 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-xl font-bold text-xs shadow-2xs transition cursor-pointer"
+                      >
+                        Cari / Input
+                      </button>
+                    </form>
                   </div>
 
                   {/* KONTROL ZOOM CEPAT & PRESET (MENGATASI KAMERA BLUR PADA BARCODE KECIL) */}

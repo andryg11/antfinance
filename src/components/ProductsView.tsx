@@ -22,7 +22,10 @@ import {
   Cloud,
   ImageIcon,
   Loader2,
-  Upload
+  Upload,
+  Barcode as BarcodeIcon,
+  Printer,
+  Zap
 } from 'lucide-react';
 import { uploadToCloudinary } from '../utils/cloudinary';
 import { compressImage } from '../utils/imageCompressor';
@@ -39,6 +42,9 @@ import { useAuth } from '../context/AuthContext';
 import { Product, PsRental, AdminFeeTier, AdminRange } from '../types';
 import { formatRupiah, formatNumberWithDots, parseNumberFromDots } from '../utils/formatters';
 import { ScannerModal, ScannedVoucherData } from './ScannerModal';
+import { Barcode1D } from './Barcode1D';
+import { BarcodeLabelModal } from './BarcodeLabelModal';
+import { generateEan13, generateCode128 } from '../utils/barcodeUtils';
 
 export const ProductsView: React.FC = () => {
   const { 
@@ -66,6 +72,10 @@ export const ProductsView: React.FC = () => {
   const [modalType, setModalType] = useState<'barang' | 'ppob_range' | 'ps'>('barang');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [editingPsUnit, setEditingPsUnit] = useState<PsRental | null>(null);
+
+  // Barcode Label Modal State
+  const [barcodeModalProduct, setBarcodeModalProduct] = useState<Product | null>(null);
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
 
   // Scanner State for Data Master
   const [isScannerOpen, setIsScannerOpen] = useState(false);
