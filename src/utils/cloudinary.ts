@@ -1,3 +1,5 @@
+import { compressImage } from './imageCompressor';
+
 // Cloudinary Upload & Configuration Utilities for CatatUsaha
 
 export interface CloudinaryConfig {
@@ -46,11 +48,17 @@ export function setLocalCloudinaryConfig(config: CloudinaryConfig) {
 /**
  * Upload an image (base64 data URI) to Cloudinary.
  * Tries server endpoint first, then direct unsigned client upload, then falls back gracefully.
+ * ALWAYS ensures the image is compressed so it never exceeds Firestore size limits.
  */
 export async function uploadToCloudinary(
-  imageBase64: string,
+  rawImageBase64: string,
   preferredConfig?: Partial<CloudinaryConfig>
 ): Promise<UploadResult> {
+  // Compress to ultra-lightweight size first (< 50KB)
+  const imageBase64 = rawImageBase64.startsWith('data:image/')
+    ? await compressImage(rawImageBase64, 480, 480, 0.7)
+    : rawImageBase64;
+
   const localConfig = getLocalCloudinaryConfig();
   const cloudName = (preferredConfig?.cloudName || localConfig.cloudName || '').trim();
   const uploadPreset = (preferredConfig?.uploadPreset || localConfig.uploadPreset || '').trim();

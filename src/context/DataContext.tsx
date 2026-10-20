@@ -14,6 +14,7 @@ import {
 import { db, handleFirestoreError, OperationType, testConnection } from '../lib/firebase';
 import { Product, Transaction, Expense, BusinessSettings, CartItem, Debt, PsRental, PsSavedTime, AdminFeeTier } from '../types';
 import { useAuth } from './AuthContext';
+import { ensureSafeForFirestore } from '../utils/imageCompressor';
 
 export const calculatePsRentalCost = (unit: PsRental, durationMinutes: number): number => {
   if (durationMinutes <= 0) return 0;
@@ -734,26 +735,34 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const newDocRef = doc(collection(db, 'products'));
       const now = new Date().toISOString();
+      const safeImageUrl = await ensureSafeForFirestore(productData.imageUrl);
       await setDoc(newDocRef, {
         ...productData,
+        imageUrl: safeImageUrl,
         isFuel: productData.category.toLowerCase().includes('bbm') || productData.isFuel || false,
         createdAt: now,
         updatedAt: now,
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'products');
+      throw error;
     }
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
     try {
       const docRef = doc(db, 'products', id);
+      const safeUpdates = { ...updates };
+      if (safeUpdates.imageUrl) {
+        safeUpdates.imageUrl = await ensureSafeForFirestore(safeUpdates.imageUrl);
+      }
       await updateDoc(docRef, {
-        ...updates,
+        ...safeUpdates,
         updatedAt: new Date().toISOString(),
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `products/${id}`);
+      throw error;
     }
   };
 

@@ -23,6 +23,7 @@ import { GoogleGenAI } from '@google/genai';
 import { Product } from '../types';
 import { useData } from '../context/DataContext';
 import { uploadToCloudinary } from '../utils/cloudinary';
+import { compressImage } from '../utils/imageCompressor';
 
 export interface ScannedVoucherData {
   name: string;
@@ -381,9 +382,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
     // Keep sharp for OCR reading yet fast transmission (under 250KB)
     const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.85);
+    // Optimized card/product photo thumbnail (< 50KB) to ensure Firestore safety
+    const safeProductPhoto = await resizeImage(rawBase64, 480, 480, 0.7);
 
     // Process with AI
-    await analyzeVoucherWithAi(compressedBase64, 'image/jpeg', rawBase64);
+    await analyzeVoucherWithAi(compressedBase64, 'image/jpeg', safeProductPhoto);
   };
 
   // Handle fallback file upload or gallery selection
@@ -403,7 +406,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       setImagePreview(rawBase64);
 
       const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.85);
-      await analyzeVoucherWithAi(compressedBase64, file.type || 'image/jpeg', rawBase64);
+      const safeProductPhoto = await resizeImage(rawBase64, 480, 480, 0.7);
+      await analyzeVoucherWithAi(compressedBase64, file.type || 'image/jpeg', safeProductPhoto);
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -415,10 +419,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const rawBase64 = event.target?.result as string;
       if (rawBase64 && cardVoucherForm) {
-        setCardVoucherForm({ ...cardVoucherForm, imageUrl: rawBase64 });
+        const safeCompressed = await compressImage(rawBase64, 480, 480, 0.7);
+        setCardVoucherForm({ ...cardVoucherForm, imageUrl: safeCompressed });
       }
     };
     reader.readAsDataURL(file);
@@ -789,9 +794,16 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
       // Upload to Cloudinary only when saving to Master (preserves Cloudinary quota)
       if (finalImageUrl.startsWith('data:image/')) {
+        // Enforce strict size check (< 50KB) so Firestore NEVER exceeds the 1MB document limit
+        finalImageUrl = await compressImage(finalImageUrl, 480, 480, 0.7);
         try {
-          const cRes = await uploadToCloudinary(finalImageUrl);
+          const cRes = await uploadToCloudinary(finalImageUrl, {
+            cloudName: settings.cloudinaryCloudName,
+            uploadPreset: settings.cloudinaryUploadPreset,
+          });
           if (cRes.success && cRes.url) {
+            finalImageUrl = cRes.url;
+          } else if (cRes.url && cRes.url.startsWith('data:image/')) {
             finalImageUrl = cRes.url;
           }
         } catch (uploadErr) {

@@ -25,6 +25,7 @@ import {
   Upload
 } from 'lucide-react';
 import { uploadToCloudinary } from '../utils/cloudinary';
+import { compressImage } from '../utils/imageCompressor';
 import { 
   useData, 
   DEFAULT_ADMIN_TIERS, 
@@ -181,11 +182,15 @@ export const ProductsView: React.FC = () => {
 
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const base64Data = event.target?.result as string;
+      const rawBase64 = event.target?.result as string;
+      const base64Data = await compressImage(rawBase64, 480, 480, 0.7);
 
       try {
-        // 1. Upload to Cloudinary
-        const uploadRes = await uploadToCloudinary(base64Data);
+        // 1. Upload to Cloudinary (using compressed photo to prevent size limit)
+        const uploadRes = await uploadToCloudinary(base64Data, {
+          cloudName: settings.cloudinaryCloudName,
+          uploadPreset: settings.cloudinaryUploadPreset,
+        });
         if (uploadRes.url) {
           setBarangForm((prev) => ({ ...prev, imageUrl: uploadRes.url! }));
         }
@@ -308,8 +313,14 @@ export const ProductsView: React.FC = () => {
     if (finalImageUrl.startsWith('data:image/')) {
       setIsUploadingPhoto(true);
       try {
-        const uploadRes = await uploadToCloudinary(finalImageUrl);
+        finalImageUrl = await compressImage(finalImageUrl, 480, 480, 0.7);
+        const uploadRes = await uploadToCloudinary(finalImageUrl, {
+          cloudName: settings.cloudinaryCloudName,
+          uploadPreset: settings.cloudinaryUploadPreset,
+        });
         if (uploadRes.success && uploadRes.url) {
+          finalImageUrl = uploadRes.url;
+        } else if (uploadRes.url && uploadRes.url.startsWith('data:image/')) {
           finalImageUrl = uploadRes.url;
         }
       } catch (err) {
