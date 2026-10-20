@@ -125,9 +125,10 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 }`;
 
       const modelsToTry = [
-        'gemini-3.8-flash',
-        'gemini-flash-latest',
-        'gemini-3.1-flash-lite'
+        'gemini-2.5-flash-lite',
+        'gemini-3.5-flash-lite',
+        'gemini-2.5-flash',
+        'gemini-flash-latest'
       ];
       let lastError: any = null;
       let response: any = null;
@@ -152,6 +153,10 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                 ],
               },
             ],
+            config: {
+              temperature: 0.1,
+              maxOutputTokens: 600,
+            },
           });
           if (response && response.text) {
             break;

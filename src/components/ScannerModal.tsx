@@ -254,6 +254,38 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
+  // Helper to resize/compress image before sending to AI for speed (1-2 seconds response)
+  const resizeImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, quality = 0.8): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(base64Str);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => resolve(base64Str);
+    });
+  };
+
   // Handle File or Camera Capture for AI Vision
   const handleImageCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -265,12 +297,15 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const base64Data = event.target?.result as string;
-      setImagePreview(base64Data);
+      const rawBase64 = event.target?.result as string;
+      setImagePreview(rawBase64);
+
+      // Compress/resize image for lightning fast AI and Cloudinary upload (1-2s)
+      const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.8);
 
       // Concurrently upload to Cloudinary
       setCloudinaryStatus({ isUploading: true });
-      uploadToCloudinary(base64Data)
+      uploadToCloudinary(compressedBase64)
         .then((cRes) => {
           setCloudinaryStatus({
             isUploading: false,
@@ -283,14 +318,14 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         .catch((cErr) => {
           setCloudinaryStatus({
             isUploading: false,
-            url: base64Data,
+            url: rawBase64,
             isSuccess: false,
             source: 'fallback_local',
             error: cErr?.message,
           });
         });
 
-      await analyzeVoucherWithAi(base64Data, file.type || 'image/jpeg');
+      await analyzeVoucherWithAi(compressedBase64, file.type || 'image/jpeg');
     };
     reader.readAsDataURL(file);
 
@@ -361,7 +396,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
   "detectedText": "teks terbaca"
 }`;
 
-        const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+        const modelsToTry = ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest'];
         let clientResp: any = null;
         for (const m of modelsToTry) {
           try {
@@ -376,6 +411,10 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                   ],
                 },
               ],
+              config: {
+                temperature: 0.1,
+                maxOutputTokens: 600,
+              },
             });
             if (clientResp && clientResp.text) break;
           } catch (cErr) {

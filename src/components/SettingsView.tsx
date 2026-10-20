@@ -48,8 +48,8 @@ export const SettingsView: React.FC = () => {
 
   const isAdmin = userProfile?.role === 'admin';
 
-  // Sub tabs for Admin: 'users' | 'security' | 'store' | 'cloudinary' | 'database'
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'security' | 'store' | 'cloudinary' | 'database'>(
+  // Sub tabs for Admin: 'users' | 'security' | 'store' | 'cloudinary' | 'gemini' | 'database'
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'security' | 'store' | 'cloudinary' | 'gemini' | 'database'>(
     isAdmin ? 'users' : 'security'
   );
 
@@ -436,6 +436,19 @@ export const SettingsView: React.FC = () => {
           >
             <Cloud className="w-4 h-4 text-sky-600" />
             <span>Cloudinary (Foto Cloud)</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('gemini')}
+            className={`px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-2 ${
+              activeSubTab === 'gemini'
+                ? 'bg-white text-teal-800 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-amber-600" />
+            <span>Gemini API Key (AI)</span>
           </button>
 
           <button
@@ -1089,58 +1102,7 @@ export const SettingsView: React.FC = () => {
             </div>
           </form>
 
-          {/* Form Konfigurasi Gemini API Key */}
-          <div className="pt-6 border-t border-slate-100 space-y-4">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2.5 rounded-2xl bg-amber-50 text-amber-700">
-                <Sparkles className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                  <span>Gemini API Key (AI Vision Scanner)</span>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                    AI Key
-                  </span>
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Masukkan Gemini API Key Anda agar pemindaian AI Voucher / Kuota berjalan lancar di Vercel atau hosting eksternal
-                </p>
-              </div>
-            </div>
 
-            <form onSubmit={handleSaveGeminiKey} className="space-y-4 text-xs">
-              <div>
-                <label className="block text-slate-700 font-bold mb-1">
-                  Gemini API Key (AIza...)
-                </label>
-                <input
-                  type="password"
-                  placeholder="AIzaSy..."
-                  value={geminiApiKeyInput}
-                  onChange={(e) => setGeminiApiKeyInput(e.target.value)}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:bg-white font-mono text-slate-900"
-                />
-                <span className="text-[10px] text-slate-400 mt-0.5 block">
-                  Dapatkan kunci gratis di Google AI Studio. Sangat penting jika dijalankan di Vercel agar AI tidak gagal mendeteksi.
-                </span>
-              </div>
-
-              {geminiSaveMsg && (
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{geminiSaveMsg}</span>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full py-3 bg-amber-600 hover:bg-amber-700 active:scale-98 text-white font-bold rounded-2xl text-xs shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Save className="w-4 h-4" />
-                <span>Simpan Gemini API Key</span>
-              </button>
-            </form>
-          </div>
 
           {/* Panduan Lengkap Langkah Demi Langkah */}
           <div className="p-5 bg-gradient-to-br from-sky-50/60 to-blue-50/60 border border-sky-200/80 rounded-2xl space-y-4">
@@ -1230,6 +1192,120 @@ export const SettingsView: React.FC = () => {
                 </span>
                 <div>
                   <b>Selesai & Tes:</b> Klik <b>"Tes Koneksi Cloudinary"</b> untuk memastikan koneksi aktif, lalu klik <b>"Simpan Pengaturan Cloudinary"</b>. Sekarang setiap foto yang Anda ambil di Data Master otomatis tersimpan di Cloudinary!
+                </div>
+              </li>
+            </ol>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB: GEMINI API KEY (AI VISION SCANNER)                                   */}
+      {/* ========================================================================= */}
+      {isAdmin && activeSubTab === 'gemini' && (
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 max-w-2xl">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-2xl bg-amber-50 text-amber-700">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+                <span>Gemini API Key (AI Vision Scanner)</span>
+                <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                  AI Key
+                </span>
+              </h3>
+              <p className="text-xs text-slate-500">
+                Konfigurasi kunci API Google AI Studio untuk pemindaian struk & kupon voucher otomatis
+              </p>
+            </div>
+          </div>
+
+          {geminiSaveMsg && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{geminiSaveMsg}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveGeminiKey} className="space-y-4 text-xs">
+            <div>
+              <label className="block text-slate-700 font-bold mb-1.5">
+                Gemini API Key (AIza...)
+              </label>
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={geminiApiKeyInput}
+                onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                className="w-full px-3.5 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:bg-white font-mono text-slate-900"
+              />
+              <span className="text-[11px] text-slate-500 mt-1 block">
+                Sangat penting saat aplikasi di-hosting di Vercel agar fitur Scan AI Voucher & Kupon dapat berjalan sempurna tanpa error.
+              </span>
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-amber-600 hover:bg-amber-700 active:scale-98 text-white font-bold rounded-2xl text-xs shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Save className="w-4 h-4" />
+              <span>Simpan Gemini API Key</span>
+            </button>
+          </form>
+
+          {/* Panduan Cara Mendapatkan API Key di Google */}
+          <div className="p-5 bg-gradient-to-br from-amber-50/70 to-orange-50/70 border border-amber-200/80 rounded-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-extrabold text-amber-950 text-xs sm:text-sm">
+                <HelpCircle className="w-4 h-4 text-amber-600" />
+                <span>Cara Mendapatkan Gemini API Key Gratis di Google AI Studio</span>
+              </div>
+              <a
+                href="https://aistudio.google.com/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] font-bold text-amber-700 hover:text-amber-900 flex items-center gap-1 hover:underline cursor-pointer"
+              >
+                <span>Buka Google AI Studio</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
+            <ol className="space-y-2.5 text-xs text-slate-700 pl-1">
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-amber-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  1
+                </span>
+                <div>
+                  <b>Buka Google AI Studio:</b> Kunjungi situs resmi <a href="https://aistudio.google.com/" target="_blank" rel="noreferrer" className="text-amber-700 font-bold underline">aistudio.google.com</a> menggunakan browser Anda.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-amber-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  2
+                </span>
+                <div>
+                  <b>Login Akun Google:</b> Masuk menggunakan akun Google (Gmail) pribadi Anda.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-amber-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  3
+                </span>
+                <div>
+                  <b>Buat API Key:</b> Di halaman utama, klik tombol <b className="text-amber-900">"Get API key"</b> atau <b>"Create API key"</b>.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-amber-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  4
+                </span>
+                <div>
+                  <b>Salin & Simpan:</b> Salin kode kunci API yang muncul (berawalan <code className="bg-white px-1.5 py-0.5 rounded border border-amber-200 font-mono text-amber-900 font-bold">AIzaSy...</code>), lalu tempel ke kolom di atas dan klik <b>Simpan Gemini API Key</b>.
                 </div>
               </li>
             </ol>
