@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { 
   Package, 
   Plus, 
@@ -18,8 +18,12 @@ import {
   AlertTriangle,
   Camera,
   ScanLine,
-  Sparkles
+  Sparkles,
+  Cloud,
+  ImageIcon,
+  Loader2
 } from 'lucide-react';
+import { uploadToCloudinary } from '../utils/cloudinary';
 import { 
   useData, 
   DEFAULT_ADMIN_TIERS, 
@@ -90,6 +94,10 @@ export const ProductsView: React.FC = () => {
         minStock: 2,
         unit: 'Pcs',
         isFuel: false,
+        imageUrl: '',
+        provider: '',
+        quota: '',
+        validity: '',
       });
       setModalType('barang');
       setEditingProduct(null);
@@ -99,6 +107,10 @@ export const ProductsView: React.FC = () => {
     }
   };
 
+  const modalPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [aiPhotoFeedback, setAiPhotoFeedback] = useState<string | null>(null);
+
   const handleScannerVoucherInfo = (info: ScannedVoucherData) => {
     if (scannerContext === 'master_form') {
       setBarangForm((prev) => ({
@@ -106,6 +118,12 @@ export const ProductsView: React.FC = () => {
         name: info.name || prev.name,
         category: 'Pulsa',
         sku: info.sku || prev.sku,
+        imageUrl: info.imageUrl || prev.imageUrl,
+        provider: info.provider || prev.provider,
+        quota: info.quota || prev.quota,
+        validity: info.validityDays || prev.validity,
+        price: info.suggestedPrice && info.suggestedPrice > 0 ? info.suggestedPrice : prev.price,
+        cost: info.suggestedCost && info.suggestedCost > 0 ? info.suggestedCost : prev.cost,
       }));
       setScannerFeedback(`Informasi voucher "${info.name}" (${info.quota || ''}) dimasukkan ke form.`);
       setTimeout(() => setScannerFeedback(null), 4500);
@@ -115,12 +133,16 @@ export const ProductsView: React.FC = () => {
         name: info.name,
         category: 'Pulsa',
         sku: info.sku || `VCR-${Date.now().toString().slice(-4)}`,
-        price: 25000,
-        cost: 22000,
+        price: info.suggestedPrice && info.suggestedPrice > 0 ? info.suggestedPrice : 25000,
+        cost: info.suggestedCost && info.suggestedCost > 0 ? info.suggestedCost : 22000,
         stock: 50,
         minStock: 5,
         unit: 'Pcs',
         isFuel: false,
+        imageUrl: info.imageUrl || '',
+        provider: info.provider || '',
+        quota: info.quota || '',
+        validity: info.validityDays || '',
       });
       setModalType('barang');
       setEditingProduct(null);
@@ -141,7 +163,78 @@ export const ProductsView: React.FC = () => {
     minStock: 10,
     unit: 'Trx',
     isFuel: false,
+    imageUrl: '',
+    provider: '',
+    quota: '',
+    validity: '',
   });
+
+  // Handle Photo Upload directly in the Add/Edit Product Modal
+  const handleModalPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingPhoto(true);
+    setAiPhotoFeedback(null);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const base64Data = event.target?.result as string;
+
+      try {
+        // 1. Upload to Cloudinary
+        const uploadRes = await uploadToCloudinary(base64Data);
+        if (uploadRes.url) {
+          setBarangForm((prev) => ({ ...prev, imageUrl: uploadRes.url! }));
+        }
+
+        // 2. Call AI Vision to detect marker writing (e.g. 10/3) and voucher data
+        const aiRes = await fetch('/api/gemini/scan-voucher', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageBase64: base64Data,
+            mimeType: file.type || 'image/jpeg',
+          }),
+        });
+
+        if (aiRes.ok) {
+          const aiJson = await aiRes.json();
+          if (aiJson.success && aiJson.data) {
+            const data = aiJson.data;
+            setBarangForm((prev) => ({
+              ...prev,
+              name: prev.name.trim() ? prev.name : data.productName || prev.name,
+              category: 'Pulsa',
+              provider: data.provider || prev.provider,
+              quota: data.quota || prev.quota,
+              validity: data.validityDays || prev.validity,
+              sku: prev.sku ? prev.sku : `VCR-${(data.provider || 'DATA').slice(0, 4).toUpperCase()}${data.quotaGigabytes ? `${data.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
+              price: prev.price === 12000 && data.suggestedPrice ? data.suggestedPrice : prev.price,
+              cost: prev.cost === 10250 && data.suggestedCost ? data.suggestedCost : prev.cost,
+            }));
+
+            if (data.handwrittenNote) {
+              setAiPhotoFeedback(`✨ Terdeteksi tulisan spidol "${data.handwrittenNote}" (${data.quota || ''}) & foto tersimpan di Cloudinary!`);
+            } else if (data.quota) {
+              setAiPhotoFeedback(`✨ Terdeteksi kuota ${data.quota} (${data.provider}) & foto tersimpan di Cloudinary!`);
+            } else {
+              setAiPhotoFeedback('✓ Foto berhasil diunggah ke Cloudinary!');
+            }
+            setTimeout(() => setAiPhotoFeedback(null), 6000);
+          }
+        }
+      } catch (err: any) {
+        console.error('Modal photo upload error:', err);
+        setAiPhotoFeedback('Foto berhasil disimpan secara lokal.');
+        setTimeout(() => setAiPhotoFeedback(null), 5000);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   // Form State: PPOB Range (Disimpan mandiri per layanan)
   const [ppobForm, setPpobForm] = useState<{
@@ -217,6 +310,10 @@ export const ProductsView: React.FC = () => {
         minStock: Number(barangForm.minStock),
         unit: barangForm.unit.trim() || 'Pcs',
         isFuel: barangForm.category === 'BBM' || barangForm.isFuel,
+        imageUrl: barangForm.imageUrl || '',
+        provider: barangForm.provider || '',
+        quota: barangForm.quota || '',
+        validity: barangForm.validity || '',
         masterType: 'barang',
       });
     } else {
@@ -230,6 +327,10 @@ export const ProductsView: React.FC = () => {
         minStock: Number(barangForm.minStock),
         unit: barangForm.unit.trim() || 'Pcs',
         isFuel: barangForm.category === 'BBM' || barangForm.isFuel,
+        imageUrl: barangForm.imageUrl || '',
+        provider: barangForm.provider || '',
+        quota: barangForm.quota || '',
+        validity: barangForm.validity || '',
         masterType: 'barang',
       });
     }
@@ -343,6 +444,10 @@ export const ProductsView: React.FC = () => {
       minStock: 10,
       unit: 'Liter',
       isFuel: true,
+      imageUrl: '',
+      provider: '',
+      quota: '',
+      validity: '',
     });
     setIsAddModalOpen(true);
   };
@@ -362,6 +467,10 @@ export const ProductsView: React.FC = () => {
         minStock: 10,
         unit: 'Trx',
         isFuel: false,
+        imageUrl: '',
+        provider: '',
+        quota: '',
+        validity: '',
       });
     } else if (type === 'ppob_range') {
       setPpobForm({
@@ -373,7 +482,7 @@ export const ProductsView: React.FC = () => {
           { min: 100001, max: 250000, fee: 3000 },
           { min: 250001, max: 500000, fee: 4000 },
           { min: 500001, max: 1000000, fee: 5000 },
-          { min: 1000001, max: 999999999, fee: 10000 },
+          { min: 100001, max: 999999999, fee: 10000 },
         ],
       });
     } else if (type === 'ps') {
@@ -400,6 +509,10 @@ export const ProductsView: React.FC = () => {
       minStock: p.minStock || 5,
       unit: p.unit || 'Pcs',
       isFuel: p.isFuel || false,
+      imageUrl: p.imageUrl || '',
+      provider: p.provider || '',
+      quota: p.quota || '',
+      validity: p.validity || '',
     });
     setIsAddModalOpen(true);
   };
@@ -798,21 +911,39 @@ export const ProductsView: React.FC = () => {
                     return (
                       <tr key={p.id} className="hover:bg-slate-50/70 transition">
                         <td className="px-4 py-3">
-                          <div className="font-semibold text-slate-800">{p.name}</div>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            {p.sku ? (
-                              <span className="text-[10px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1 border border-slate-200" title="Kode Barcode / SKU">
-                                <ScanLine className="w-2.5 h-2.5 text-teal-600" />
-                                {p.sku}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-400 italic">Tanpa barcode</span>
-                            )}
-                            {p.isFuel && (
-                              <span className="text-[9px] text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                                BBM Liter
-                              </span>
-                            )}
+                          <div className="flex items-center gap-2.5">
+                            {p.imageUrl ? (
+                              <img
+                                src={p.imageUrl}
+                                alt={p.name}
+                                className="w-10 h-10 object-cover rounded-xl border border-slate-200 shrink-0 shadow-xs"
+                                title="Foto tersimpan di Cloudinary"
+                              />
+                            ) : null}
+                            <div>
+                              <div className="font-semibold text-slate-800">{p.name}</div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                {p.sku ? (
+                                  <span className="text-[10px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1 border border-slate-200" title="Kode Barcode / SKU">
+                                    <ScanLine className="w-2.5 h-2.5 text-teal-600" />
+                                    {p.sku}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] text-slate-400 italic">Tanpa barcode</span>
+                                )}
+                                {p.isFuel && (
+                                  <span className="text-[9px] text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                    BBM Liter
+                                  </span>
+                                )}
+                                {p.imageUrl && (
+                                  <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 flex items-center gap-0.5" title="Foto Cloudinary">
+                                    <Cloud className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span>Cloud</span>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -1021,17 +1152,106 @@ export const ProductsView: React.FC = () => {
             {/* FORM 1: BARANG & PULSA */}
             {modalType === 'barang' && (
               <form onSubmit={handleSaveBarang} className="p-5 space-y-3.5 text-xs">
+                {/* UPLOAD FOTO KE CLOUDINARY & BACA SPIDOL */}
+                <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-slate-700 flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-teal-600" />
+                      <span>Foto Voucher / Produk (Cloudinary)</span>
+                    </label>
+                    {barangForm.imageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setBarangForm((prev) => ({ ...prev, imageUrl: '' }))}
+                        className="text-[11px] text-rose-600 hover:text-rose-700 font-semibold cursor-pointer"
+                      >
+                        Hapus Foto
+                      </button>
+                    )}
+                  </div>
+
+                  {barangForm.imageUrl ? (
+                    <div className="flex items-center gap-3 bg-white p-2.5 rounded-xl border border-slate-200">
+                      <img
+                        src={barangForm.imageUrl}
+                        alt="Preview Produk"
+                        className="w-16 h-16 object-cover rounded-xl border border-slate-200 shadow-xs shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-emerald-700">
+                          <Cloud className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span className="truncate">
+                            {barangForm.imageUrl.includes('cloudinary') ? 'Tersimpan di Cloudinary Cloud' : 'Foto Tersimpan (Lokal)'}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5 truncate font-mono">
+                          {barangForm.imageUrl}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => modalPhotoInputRef.current?.click()}
+                          className="mt-1 text-[11px] text-teal-700 hover:text-teal-900 font-bold hover:underline cursor-pointer"
+                        >
+                          Ganti Foto Voucher
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => modalPhotoInputRef.current?.click()}
+                        disabled={isUploadingPhoto}
+                        className="flex-1 py-2.5 px-3 bg-white border border-dashed border-teal-300 hover:border-teal-500 rounded-xl text-teal-800 font-bold flex items-center justify-center gap-2 transition hover:bg-teal-50/40 cursor-pointer text-xs"
+                      >
+                        {isUploadingPhoto ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-teal-600" />
+                            <span>Mengunggah ke Cloudinary & Deteksi Spidol...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Camera className="w-4 h-4 text-teal-600" />
+                            <span>Ambil Foto / Upload Voucher (Deteksi Tulisan Spidol)</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Feedback deteksi spidol */}
+                  {aiPhotoFeedback && (
+                    <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-[11px] font-semibold flex items-center gap-1.5 animate-in fade-in">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>{aiPhotoFeedback}</span>
+                    </div>
+                  )}
+
+                  <input
+                    type="file"
+                    ref={modalPhotoInputRef}
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleModalPhotoUpload}
+                  />
+                </div>
+
                 <div>
-                  <label className="block text-slate-600 font-medium mb-1">
-                    Nama Barang / Pulsa *
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-slate-600 font-medium">
+                      Nama Barang / Pulsa *
+                    </label>
+                    <span className="text-[10px] text-slate-400">
+                      Bisa diedit/ketik sendiri nama voucher
+                    </span>
+                  </div>
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: Pulsa Telkomsel 10rb / Beras 5kg"
+                    placeholder="Contoh: Voucher Tri 10 GB (3 Hari) / Pulsa Telkomsel"
                     value={barangForm.name}
                     onChange={(e) => setBarangForm({ ...barangForm, name: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold text-slate-900"
                   />
                 </div>
 

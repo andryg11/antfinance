@@ -365,17 +365,25 @@ export const PosView: React.FC = () => {
                       className="px-4 py-3 flex items-center justify-between hover:bg-teal-50/70 transition cursor-pointer select-none group"
                     >
                       <div className="flex items-center space-x-3">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs ${
-                            isRange
-                              ? 'bg-blue-100 text-blue-700'
-                              : isPulsa
-                              ? 'bg-purple-100 text-purple-700'
-                              : 'bg-emerald-100 text-emerald-700'
-                          }`}
-                        >
-                          {isRange ? 'PPOB' : isPulsa ? 'PULSA' : 'BRG'}
-                        </div>
+                        {p.imageUrl ? (
+                          <img
+                            src={p.imageUrl}
+                            alt={p.name}
+                            className="w-10 h-10 object-cover rounded-xl border border-slate-200 shrink-0 shadow-xs"
+                          />
+                        ) : (
+                          <div
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
+                              isRange
+                                ? 'bg-blue-100 text-blue-700'
+                                : isPulsa
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-emerald-100 text-emerald-700'
+                            }`}
+                          >
+                            {isRange ? 'PPOB' : isPulsa ? 'PULSA' : 'BRG'}
+                          </div>
+                        )}
                         <div>
                           <div className="text-sm font-bold text-slate-800 group-hover:text-teal-700 transition">
                             {p.name}
@@ -421,9 +429,17 @@ export const PosView: React.FC = () => {
             {/* Banner Item yang Dipilih */}
             <div className="p-4 bg-teal-50 border border-teal-200 rounded-2xl flex items-center justify-between">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center font-bold text-sm">
-                  ✓
-                </div>
+                {selectedProduct.imageUrl ? (
+                  <img
+                    src={selectedProduct.imageUrl}
+                    alt={selectedProduct.name}
+                    className="w-12 h-12 object-cover rounded-xl border border-teal-300 shrink-0 shadow-xs"
+                  />
+                ) : (
+                  <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center font-bold text-sm">
+                    ✓
+                  </div>
+                )}
                 <div>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-teal-700">
                     Item Terpilih ({selectedProduct.category})

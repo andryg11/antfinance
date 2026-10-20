@@ -20,10 +20,16 @@ import {
   AlertCircle,
   Lock,
   Eye,
-  EyeOff
+  EyeOff,
+  Cloud,
+  ExternalLink,
+  Sparkles,
+  HelpCircle,
+  Loader2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
+import { getLocalCloudinaryConfig, setLocalCloudinaryConfig } from '../utils/cloudinary';
 
 export const SettingsView: React.FC = () => {
   const { 
@@ -42,10 +48,19 @@ export const SettingsView: React.FC = () => {
 
   const isAdmin = userProfile?.role === 'admin';
 
-  // Sub tabs for Admin: 'users' | 'security' | 'store' | 'database'
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'security' | 'store' | 'database'>(
+  // Sub tabs for Admin: 'users' | 'security' | 'store' | 'cloudinary' | 'database'
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'security' | 'store' | 'cloudinary' | 'database'>(
     isAdmin ? 'users' : 'security'
   );
+
+  const localCloud = getLocalCloudinaryConfig();
+  const [cloudinaryForm, setCloudinaryForm] = useState({
+    cloudName: settings.cloudinaryCloudName || localCloud.cloudName || '',
+    uploadPreset: settings.cloudinaryUploadPreset || localCloud.uploadPreset || '',
+  });
+  const [cloudinarySaveMsg, setCloudinarySaveMsg] = useState<string | null>(null);
+  const [cloudinaryTestMsg, setCloudinaryTestMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isTestingCloudinary, setIsTestingCloudinary] = useState(false);
 
   // Store form state (Admin only)
   const [storeForm, setStoreForm] = useState({
@@ -91,6 +106,73 @@ export const SettingsView: React.FC = () => {
     await updateSettings(storeForm);
     setIsSavedMessage(true);
     setTimeout(() => setIsSavedMessage(false), 3000);
+  };
+
+  // Handle Cloudinary configuration save
+  const handleSaveCloudinary = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCloudinarySaveMsg(null);
+    setLocalCloudinaryConfig({
+      cloudName: cloudinaryForm.cloudName.trim(),
+      uploadPreset: cloudinaryForm.uploadPreset.trim(),
+    });
+    await updateSettings({
+      cloudinaryCloudName: cloudinaryForm.cloudName.trim(),
+      cloudinaryUploadPreset: cloudinaryForm.uploadPreset.trim(),
+    });
+    setCloudinarySaveMsg('Pengaturan Cloud Name & Upload Preset berhasil disimpan!');
+    setTimeout(() => setCloudinarySaveMsg(null), 4000);
+  };
+
+  // Test Cloudinary connection using direct lightweight 1x1 image upload
+  const handleTestCloudinary = async () => {
+    setIsTestingCloudinary(true);
+    setCloudinaryTestMsg(null);
+    const targetCloud = cloudinaryForm.cloudName.trim();
+    const targetPreset = cloudinaryForm.uploadPreset.trim();
+
+    if (!targetCloud || !targetPreset) {
+      setCloudinaryTestMsg({
+        type: 'error',
+        text: 'Mohon isi Cloud Name dan Upload Preset terlebih dahulu sebelum melakukan tes koneksi.',
+      });
+      setIsTestingCloudinary(false);
+      return;
+    }
+
+    try {
+      // 1x1 transparent GIF base64
+      const tinyGif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      const res = await fetch(`https://api.cloudinary.com/v1_1/${targetCloud}/image/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file: tinyGif,
+          upload_preset: targetPreset,
+          folder: 'catatusaha_test',
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok && data.secure_url) {
+        setCloudinaryTestMsg({
+          type: 'success',
+          text: `✓ Terhubung! Akun Cloudinary "${targetCloud}" aktif. Foto produk & voucher yang diupload/difoto akan langsung tersimpan di Cloudinary.`,
+        });
+      } else {
+        setCloudinaryTestMsg({
+          type: 'error',
+          text: `Gagal: ${data?.error?.message || 'Pastikan Signing Mode pada Upload Preset diatur ke "Unsigned" dan Cloud Name benar.'}`,
+        });
+      }
+    } catch (err: any) {
+      setCloudinaryTestMsg({
+        type: 'error',
+        text: `Koneksi gagal: ${err.message || 'Periksa koneksi internet Anda.'}`,
+      });
+    } finally {
+      setIsTestingCloudinary(false);
+    }
   };
 
   // Handle current user password change
@@ -327,6 +409,19 @@ export const SettingsView: React.FC = () => {
           >
             <Store className="w-4 h-4" />
             <span>Profil Toko & Struk</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('cloudinary')}
+            className={`px-4 py-2 rounded-xl transition cursor-pointer flex items-center gap-2 ${
+              activeSubTab === 'cloudinary'
+                ? 'bg-white text-teal-800 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Cloud className="w-4 h-4 text-sky-600" />
+            <span>Cloudinary (Foto Cloud)</span>
           </button>
 
           <button
@@ -849,6 +944,229 @@ export const SettingsView: React.FC = () => {
               <span>Simpan Informasi Toko</span>
             </button>
           </form>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB: CLOUDINARY CLOUD STORAGE (ADMIN ONLY)                                */}
+      {/* ========================================================================= */}
+      {isAdmin && activeSubTab === 'cloudinary' && (
+        <div className="bg-white p-6 sm:p-8 rounded-3xl border border-slate-100 shadow-xs space-y-6 max-w-3xl">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 rounded-2xl bg-sky-50 text-sky-700">
+                <Cloud className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+                  <span>Penyimpanan Foto Produk di Cloudinary</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 text-sky-800">
+                    Cloud Storage
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Semua foto voucher dan produk yang difoto/diunggah akan langsung tersimpan aman di Cloudinary
+                </p>
+              </div>
+            </div>
+
+            {cloudinaryForm.cloudName && cloudinaryForm.uploadPreset ? (
+              <span className="px-3 py-1 bg-emerald-50 text-emerald-800 text-xs font-bold rounded-xl border border-emerald-200 flex items-center gap-1.5 shrink-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Terhubung</span>
+              </span>
+            ) : (
+              <span className="px-3 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded-xl border border-slate-200 shrink-0">
+                Belum Terhubung
+              </span>
+            )}
+          </div>
+
+          {/* Form Pengaturan Cloudinary */}
+          <form onSubmit={handleSaveCloudinary} className="space-y-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  Cloud Name Cloudinary *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="contoh: dxyzk123"
+                  value={cloudinaryForm.cloudName}
+                  onChange={(e) => setCloudinaryForm({ ...cloudinaryForm, cloudName: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:bg-white font-mono text-slate-900"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Ditemukan di Dashboard konsol Cloudinary Anda.
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  Upload Preset (Mode: Unsigned) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="contoh: catatusaha_preset"
+                  value={cloudinaryForm.uploadPreset}
+                  onChange={(e) => setCloudinaryForm({ ...cloudinaryForm, uploadPreset: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-500 focus:bg-white font-mono text-slate-900"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Preset upload di Cloudinary dengan Signing Mode = <b>Unsigned</b>.
+                </span>
+              </div>
+            </div>
+
+            {/* Alert Save Feedback */}
+            {cloudinarySaveMsg && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{cloudinarySaveMsg}</span>
+              </div>
+            )}
+
+            {/* Alert Test Feedback */}
+            {cloudinaryTestMsg && (
+              <div className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-start gap-2.5 ${
+                cloudinaryTestMsg.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}>
+                {cloudinaryTestMsg.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                )}
+                <span>{cloudinaryTestMsg.text}</span>
+              </div>
+            )}
+
+            {/* Tombol Aksi */}
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <button
+                type="submit"
+                className="flex-1 py-3 bg-sky-600 hover:bg-sky-700 active:scale-98 text-white font-bold rounded-2xl text-xs shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>Simpan Pengaturan Cloudinary</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleTestCloudinary}
+                disabled={isTestingCloudinary}
+                className="px-5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-2xl text-xs transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {isTestingCloudinary ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-sky-600" />
+                    <span>Mengecek Koneksi...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-sky-600" />
+                    <span>Tes Koneksi Cloudinary</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+
+          {/* Panduan Lengkap Langkah Demi Langkah */}
+          <div className="p-5 bg-gradient-to-br from-sky-50/60 to-blue-50/60 border border-sky-200/80 rounded-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-extrabold text-sky-950 text-xs sm:text-sm">
+                <HelpCircle className="w-4 h-4 text-sky-600" />
+                <span>Panduan Lengkap Menghubungkan Cloudinary (Gratis Selamanya 2 Menit)</span>
+              </div>
+              <a
+                href="https://cloudinary.com"
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] font-bold text-sky-700 hover:text-sky-900 flex items-center gap-1 hover:underline cursor-pointer"
+              >
+                <span>Buka Cloudinary.com</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
+            <ol className="space-y-2.5 text-xs text-slate-700 pl-1">
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  1
+                </span>
+                <div>
+                  <b>Daftar Akun Gratis:</b> Buka situs <a href="https://cloudinary.com" target="_blank" rel="noreferrer" className="text-sky-700 font-bold underline">cloudinary.com</a> lalu klik <i>Sign Up for Free</i>. Paket gratis mencakup kuota penyimpanan cloud dan bandwidth yang sangat besar untuk usaha Anda.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  2
+                </span>
+                <div>
+                  <b>Salin Cloud Name:</b> Setelah masuk ke <i>Console / Dashboard Cloudinary</i>, Anda akan langsung melihat <b>Cloud Name</b> (misalnya: <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-sky-800 font-bold">dxyzk123</code>). Salin dan tempel ke kolom <i>Cloud Name</i> di atas.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  3
+                </span>
+                <div>
+                  <b>Buka Menu Settings:</b> Klik ikon roda gigi ⚙️ <b>Settings</b> yang berada di pojok kiri bawah layar Cloudinary Anda.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  4
+                </span>
+                <div>
+                  <b>Pilih Tab Upload:</b> Pada halaman Settings, klik tab menu <b>Upload</b>.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  5
+                </span>
+                <div>
+                  <b>Tambah Upload Preset:</b> Gulir ke bawah ke bagian <b>Upload presets</b>, lalu klik tombol <b>Add upload preset</b>.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-rose-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  6
+                </span>
+                <div>
+                  <b className="text-rose-900 font-extrabold">Ubah Signing Mode ke Unsigned (PENTING!):</b> Pada bagian <i>Signing Mode</i>, ubah pilihannya dari <span className="line-through text-slate-400">Signed</span> menjadi <b className="text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">Unsigned</b>. Hal ini memungkinkan kamera HP kasir mengunggah foto secara langsung tanpa membutuhkan API Secret.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-sky-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  7
+                </span>
+                <div>
+                  <b>Simpan Preset:</b> Klik tombol <b>Save</b> di kanan atas. Salin nama <i>Upload Preset</i> tersebut (misal: <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 font-bold">catatusaha_preset</code>) dan tempel ke kolom di atas.
+                </div>
+              </li>
+
+              <li className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-emerald-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">
+                  8
+                </span>
+                <div>
+                  <b>Selesai & Tes:</b> Klik <b>"Tes Koneksi Cloudinary"</b> untuk memastikan koneksi aktif, lalu klik <b>"Simpan Pengaturan Cloudinary"</b>. Sekarang setiap foto yang Anda ambil di Data Master otomatis tersimpan di Cloudinary!
+                </div>
+              </li>
+            </ol>
+          </div>
         </div>
       )}
 

@@ -4,11 +4,24 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import { v2 as cloudinary } from 'cloudinary';
 
 dotenv.config();
 
 // Ensure Vite HMR is disabled in cloud container proxy environment
 process.env.DISABLE_HMR = 'true';
+
+// Configure Cloudinary from environment if provided
+if (process.env.CLOUDINARY_URL) {
+  cloudinary.config();
+} else if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true,
+  });
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -51,11 +64,11 @@ async function startServer() {
       // Clean base64 string if it contains data URI prefix
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
-      const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang sangat ahli dan teliti dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label voucher konter.
+      const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang sangat ahli dan teliti dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter.
 Tugas Anda adalah menganalisis gambar voucher/kartu perdana/catatan konter ini dan mengekstrak data berikut secara cerdas:
 
 1. OPERATOR / PROVIDER:
-   - Kenali nama provider dari logo, tulisan resmi, maupun singkatan/tulisan tangan:
+   - Kenali nama provider dari logo resmi, tulisan cetak, warna kartu, maupun singkatan/tulisan tangan:
      * "Tri" / "3" / "Three"
      * "Telkomsel" / "Tsel" / "Simpati" / "AS" / "by.U"
      * "Indosat" / "IM3" / "Ooredoo"
@@ -63,30 +76,37 @@ Tugas Anda adalah menganalisis gambar voucher/kartu perdana/catatan konter ini d
      * "Axis" / "Aigo"
      * "Smartfren" / "SF"
 
-2. KUOTA & MASA AKTIF (Termasuk Notasi Singkatan Konter Pulsa Indonesia):
-   - Di konter pulsa Indonesia, penjual sering menuliskan singkatan spidol/label seperti "tri 3/5" atau "3/5", "1.5/3", "2/5", "5/7", "10/30".
-     * Pola angka "X/Y" seperti "3/5" ARTINYA: X = Kuota GB (contoh 3 GB), dan Y = Masa Aktif Hari (contoh 5 Hari). Jadi "tri 3/5" = Provider Tri, Kuota 3 GB, Masa aktif 5 Hari!
-     * Pola lain: "3gb 5hr", "2gb 3d", "10gb 30h", dsb.
-   - Bila voucher mencantumkan kuota cetak (misal "Total Kuota 10 GB 30 Hari"), ambil kuota dan masa aktif tersebut.
-   - Bila terdapat catatan tulisan tangan/spidol/label konter DAN juga tulisan cetak, pahami maksudnya secara utuh.
+2. TULISAN TANGAN / SPIDOL PENJUAL KONTER (SANGAT PENTING):
+   - Di konter pulsa Indonesia, pemilik konter sering menuliskan ringkasan dengan SPIDOL di bagian depan atau belakang kartu/voucher, misalnya "10/3", "tri 10/3", "3/5", "1.5/3", "2/5", "5/7", "10/30".
+     * Pola angka "X/Y" seperti "10/3": ARTINYA X = Kuota GB (10 GB), dan Y = Masa Aktif (3 Hari). Jadi "10/3" = Kuota 10 GB, Masa aktif 3 Hari!
+     * Pola "3/5" = Kuota 3 GB, Masa aktif 5 Hari.
+     * Pola "1.5/3" = Kuota 1.5 GB, Masa aktif 3 Hari.
+     * Pola "10/30" = Kuota 10 GB, Masa aktif 30 Hari.
+     * Catat tulisan spidol persis yang terbaca di field "handwrittenNote" (contoh: "10/3").
+   - Jika terdapat harga modal atau harga jual yang ditulis spidol (misal: "m18" / "j22" / "22k"), ekstrak sebagai saran harga.
+   - Bila voucher mencantumkan kuota cetak pabrik (misal "Total Kuota 10 GB"), gunakan itu sebagai acuan atau gabungkan dengan catatan spidol jika voucher merupakan injeksi kuota khusus.
 
-3. NAMA PRODUK & KATA KUNCI PENCARIAN:
-   - Buat nama produk yang rapi dan terstandarisasi untuk data master kasir, contoh:
+3. NAMA PRODUK & KATA KUNCI DATA MASTER:
+   - Buatkan nama produk yang rapi untuk pendaftaran di Data Master kasir, contoh:
+     * "Voucher Tri 10 GB (3 Hari)"
      * "Voucher Tri 3 GB (5 Hari)"
      * "Voucher Indosat 10 GB (30 Hari)"
      * "Voucher Axis Aigo 2 GB (3 Hari)"
      * "Voucher Telkomsel 15 GB (30 Hari)"
-   - Sediakan "searchKeyword" singkat untuk memudahkan pencarian di Data Master kasir (contoh: "Tri 3 GB" atau "Indosat 10 GB").
+   - Sediakan "searchKeyword" singkat untuk pencarian kasir (contoh: "Tri 10 GB" atau "Tri 3 GB").
 
 Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 {
   "provider": "Nama Provider (misal: Tri / Indosat / Telkomsel / Axis / XL / Smartfren)",
-  "quota": "Angka dan satuan kuota (misal: '3 GB' atau '10 GB')",
-  "quotaGigabytes": 3,
-  "validityDays": "5 Hari",
-  "productName": "Voucher Tri 3 GB (5 Hari)",
-  "searchKeyword": "Tri 3 GB",
-  "detectedText": "Ringkasan tulisan atau catatan yang terbaca pada gambar"
+  "quota": "10 GB",
+  "quotaGigabytes": 10,
+  "validityDays": "3 Hari",
+  "handwrittenNote": "10/3",
+  "productName": "Voucher Tri 10 GB (3 Hari)",
+  "searchKeyword": "Tri 10 GB",
+  "suggestedCost": 0,
+  "suggestedPrice": 0,
+  "detectedText": "Ringkasan tulisan cetak atau catatan spidol yang terbaca pada gambar"
 }`;
 
       const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
@@ -146,8 +166,11 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
           quota: '',
           quotaGigabytes: 0,
           validityDays: '',
+          handwrittenNote: '',
           productName: '',
           searchKeyword: '',
+          suggestedCost: 0,
+          suggestedPrice: 0,
           detectedText: responseText.slice(0, 200),
         },
         raw: responseText,
@@ -173,11 +196,128 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
     }
   });
 
+  // Cloudinary Upload Endpoint
+  app.post('/api/cloudinary/upload', async (req, res) => {
+    try {
+      const { imageBase64, cloudName, uploadPreset } = req.body;
+      if (!imageBase64) {
+        return res.status(400).json({ error: 'Data gambar (base64) diperlukan.' });
+      }
+
+      // Check if server environment has signed Cloudinary credentials or request body has api_key / secret
+      const reqApiKey = req.body.apiKey;
+      const reqApiSecret = req.body.apiSecret;
+      const reqCloudName = req.body.cloudName || process.env.CLOUDINARY_CLOUD_NAME;
+      const reqUploadPreset = req.body.uploadPreset || process.env.CLOUDINARY_UPLOAD_PRESET;
+
+      const effectiveApiKey = reqApiKey || process.env.CLOUDINARY_API_KEY;
+      const effectiveApiSecret = reqApiSecret || process.env.CLOUDINARY_API_SECRET;
+      const effectiveCloudName = reqCloudName;
+
+      if (effectiveCloudName && effectiveApiKey && effectiveApiSecret) {
+        // Configure on the fly if needed
+        cloudinary.config({
+          cloud_name: effectiveCloudName,
+          api_key: effectiveApiKey,
+          api_secret: effectiveApiSecret,
+          secure: true,
+        });
+
+        const uploadResult = await cloudinary.uploader.upload(imageBase64, {
+          folder: 'catatusaha_products',
+          resource_type: 'image',
+        });
+        return res.json({
+          success: true,
+          url: uploadResult.secure_url || uploadResult.url,
+          publicId: uploadResult.public_id,
+          source: 'cloudinary_server_signed',
+        });
+      }
+
+      const hasServerSigned = Boolean(
+        process.env.CLOUDINARY_URL ||
+        (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET)
+      );
+
+      if (hasServerSigned) {
+        const uploadResult = await cloudinary.uploader.upload(imageBase64, {
+          folder: 'catatusaha_products',
+          resource_type: 'image',
+        });
+        return res.json({
+          success: true,
+          url: uploadResult.secure_url || uploadResult.url,
+          publicId: uploadResult.public_id,
+          source: 'cloudinary_server',
+        });
+      }
+
+      // If client supplied cloudName & uploadPreset or env has CLOUDINARY_CLOUD_NAME / PRESET
+      const targetCloud = (cloudName || process.env.CLOUDINARY_CLOUD_NAME || '').trim();
+      const targetPreset = (uploadPreset || process.env.CLOUDINARY_UPLOAD_PRESET || '').trim();
+
+      if (targetCloud && targetPreset) {
+        const cRes = await fetch(`https://api.cloudinary.com/v1_1/${targetCloud}/image/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            file: imageBase64,
+            upload_preset: targetPreset,
+            folder: 'catatusaha_products',
+          }),
+        });
+
+        const cData = await cRes.json();
+        if (cRes.ok && cData.secure_url) {
+          return res.json({
+            success: true,
+            url: cData.secure_url,
+            publicId: cData.public_id,
+            source: 'cloudinary_preset',
+          });
+        }
+
+        console.error('Cloudinary API error:', cData);
+        return res.status(400).json({
+          error: cData?.error?.message || 'Gagal upload ke Cloudinary. Periksa Cloud Name dan Upload Preset.',
+        });
+      }
+
+      return res.status(400).json({
+        notConfigured: true,
+        error: 'Cloudinary belum dikonfigurasi. Masukkan Cloud Name & Upload Preset di Pengaturan Usaha.',
+      });
+    } catch (err: any) {
+      console.error('Error in /api/cloudinary/upload:', err);
+      return res.status(500).json({
+        error: err.message || 'Gagal mengunggah gambar ke Cloudinary.',
+      });
+    }
+  });
+
+  // Cloudinary Status
+  app.get('/api/cloudinary/status', (req, res) => {
+    const hasEnv = Boolean(
+      process.env.CLOUDINARY_URL ||
+      (process.env.CLOUDINARY_CLOUD_NAME && (process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_UPLOAD_PRESET))
+    );
+    res.json({
+      hasEnv,
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+      hasPreset: Boolean(process.env.CLOUDINARY_UPLOAD_PRESET),
+    });
+  });
+
   // Health check
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+      hasCloudinary: Boolean(
+        process.env.CLOUDINARY_URL || 
+        (process.env.CLOUDINARY_CLOUD_NAME && (process.env.CLOUDINARY_API_KEY || process.env.CLOUDINARY_UPLOAD_PRESET))
+      ),
     });
   });
 

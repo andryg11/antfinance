@@ -26,6 +26,10 @@ export interface Product {
   masterType?: 'barang' | 'ppob_range' | 'ps';
   ppobProvider?: string;
   adminRanges?: AdminRange[]; // Range fee per layanan PPOB
+  imageUrl?: string; // Cloudinary secure URL
+  provider?: string; // e.g. Tri, Telkomsel, Axis, Indosat, XL, Smartfren
+  quota?: string; // e.g. "10 GB"
+  validity?: string; // e.g. "3 Hari" / "30 Hari"
   createdAt: string;
   updatedAt: string;
 }
@@ -135,6 +139,9 @@ export interface BusinessSettings {
   phone: string;
   receiptFooter: string;
   adminFeeTiers?: AdminFeeTier[];
+  cloudinaryCloudName?: string;
+  cloudinaryUploadPreset?: string;
+  cloudinaryApiKey?: string;
   updatedAt?: string;
 }
 

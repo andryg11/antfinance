@@ -15,11 +15,14 @@ import {
   PackageCheck,
   Search,
   Maximize2,
-  SwitchCamera
+  SwitchCamera,
+  Cloud,
+  ImageIcon
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { Product } from '../types';
 import { formatRupiah } from '../utils/formatters';
+import { uploadToCloudinary } from '../utils/cloudinary';
 
 export interface ScannedVoucherData {
   name: string;
@@ -29,6 +32,11 @@ export interface ScannedVoucherData {
   quotaGigabytes?: number;
   provider?: string;
   validityDays?: string;
+  handwrittenNote?: string;
+  suggestedCost?: number;
+  suggestedPrice?: number;
+  imageUrl?: string;
+  isCloudinaryUploaded?: boolean;
 }
 
 export interface ScannerModalProps {
@@ -50,8 +58,11 @@ interface AiScanResult {
   quota: string;
   quotaGigabytes?: number;
   validityDays?: string;
+  handwrittenNote?: string;
   productName?: string;
   searchKeyword?: string;
+  suggestedCost?: number;
+  suggestedPrice?: number;
   detectedText?: string;
 }
 
@@ -88,6 +99,13 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [aiResult, setAiResult] = useState<AiScanResult | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [matchedProducts, setMatchedProducts] = useState<Product[]>([]);
+  const [cloudinaryStatus, setCloudinaryStatus] = useState<{
+    isUploading: boolean;
+    url?: string;
+    isSuccess?: boolean;
+    source?: string;
+    error?: string;
+  }>({ isUploading: false });
 
   // QR / Barcode states
   const [isQrScanning, setIsQrScanning] = useState(false);
@@ -246,6 +264,29 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     reader.onload = async (event) => {
       const base64Data = event.target?.result as string;
       setImagePreview(base64Data);
+
+      // Concurrently upload to Cloudinary
+      setCloudinaryStatus({ isUploading: true });
+      uploadToCloudinary(base64Data)
+        .then((cRes) => {
+          setCloudinaryStatus({
+            isUploading: false,
+            url: cRes.url,
+            isSuccess: cRes.success,
+            source: cRes.source,
+            error: cRes.error,
+          });
+        })
+        .catch((cErr) => {
+          setCloudinaryStatus({
+            isUploading: false,
+            url: base64Data,
+            isSuccess: false,
+            source: 'fallback_local',
+            error: cErr?.message,
+          });
+        });
+
       await analyzeVoucherWithAi(base64Data, file.type || 'image/jpeg');
     };
     reader.readAsDataURL(file);
@@ -300,14 +341,22 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     const providerTerm = (data.provider || '').toLowerCase().trim();
     const quotaTerm = (data.quota || '').toLowerCase().trim(); // e.g. "10 gb"
     const gigabytes = data.quotaGigabytes;
+    const noteTerm = (data.handwrittenNote || '').toLowerCase().trim(); // e.g. "10/3"
+    const validityTerm = (data.validityDays || '').toLowerCase().trim(); // e.g. "3 hari"
 
     // Search rules:
     // 1. Matches quota (e.g. "10 gb" or "10gb") AND provider (e.g. "telkomsel" / "indosat")
-    // 2. Or matches quota number in product name
+    // 2. Matches handwritten marker note (e.g. "10/3" or "3/5")
+    // 3. Or matches quota number in product name
     const matches = products.filter((p) => {
       const pName = p.name.toLowerCase();
       const pCat = p.category.toLowerCase();
       const pSku = (p.sku || '').toLowerCase();
+
+      // Check if product specifically matches handwritten note (e.g. "10/3")
+      if (noteTerm && (pName.includes(noteTerm) || pSku.includes(noteTerm))) {
+        return true;
+      }
 
       // Check if product mentions the provider
       const hasProvider =
@@ -328,6 +377,21 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       if (hasQuota) return true;
       if (hasProvider && data.productName && pName.includes(data.productName.toLowerCase())) return true;
       return false;
+    });
+
+    // Sort matches: items that also match validity or provider come first
+    matches.sort((a, b) => {
+      const aName = a.name.toLowerCase();
+      const bName = b.name.toLowerCase();
+      let scoreA = 0;
+      let scoreB = 0;
+      if (providerTerm && aName.includes(providerTerm)) scoreA += 2;
+      if (providerTerm && bName.includes(providerTerm)) scoreB += 2;
+      if (validityTerm && aName.includes(validityTerm)) scoreA += 2;
+      if (validityTerm && bName.includes(validityTerm)) scoreB += 2;
+      if (noteTerm && aName.includes(noteTerm)) scoreA += 3;
+      if (noteTerm && bName.includes(noteTerm)) scoreB += 3;
+      return scoreB - scoreA;
     });
 
     setMatchedProducts(matches);
@@ -510,26 +574,70 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                   </div>
 
                   {/* Main highlighted quota badge */}
-                  <div className="bg-white p-3.5 rounded-xl border border-teal-100 shadow-xs flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] text-slate-400 font-semibold uppercase">Total Kuota Terdeteksi</div>
-                      <div className="text-2xl font-black text-teal-700 tracking-tight flex items-baseline gap-1">
-                        {aiResult.quota || 'Tidak terbaca'}
+                  <div className="bg-white p-3.5 rounded-xl border border-teal-100 shadow-xs space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-[10px] text-slate-400 font-semibold uppercase">Total Kuota Terdeteksi</div>
+                        <div className="text-2xl font-black text-teal-700 tracking-tight flex items-baseline gap-1">
+                          {aiResult.quota || 'Tidak terbaca'}
+                        </div>
+                        <div className="text-xs text-slate-600 font-bold mt-0.5">
+                          {aiResult.provider} {aiResult.productName ? `• ${aiResult.productName}` : ''}
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-600 font-bold mt-0.5">
-                        {aiResult.provider} {aiResult.productName ? `• ${aiResult.productName}` : ''}
+
+                      <div className="text-right space-y-1">
+                        {aiResult.validityDays && (
+                          <span className="inline-block px-2.5 py-1 bg-amber-50 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200/50">
+                            Aktif {aiResult.validityDays}
+                          </span>
+                        )}
+                        <div className="text-[10px] text-slate-400">
+                          {aiResult.detectedText ? `Detail: ${aiResult.detectedText.slice(0, 35)}...` : ''}
+                        </div>
                       </div>
                     </div>
 
-                    <div className="text-right">
-                      {aiResult.validityDays && (
-                        <span className="inline-block px-2.5 py-1 bg-amber-50 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200/50 mb-1">
-                          Aktif {aiResult.validityDays}
+                    {/* Detected Marker / Spidol Handwriting Callout (e.g. 10/3, 3/5) */}
+                    {aiResult.handwrittenNote && (
+                      <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                          <span className="text-sm">✏️</span>
+                          <span>Tulisan Spidol Terdeteksi:</span>
+                          <span className="px-2 py-0.5 bg-amber-200/80 text-amber-950 font-black rounded-md font-mono text-xs">
+                            {aiResult.handwrittenNote}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-amber-700 font-medium">
+                          {aiResult.quota} ({aiResult.validityDays || 'Hari'})
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Cloudinary Upload Status Badge */}
+                    <div className="pt-1 flex items-center justify-between text-[11px]">
+                      {cloudinaryStatus.isUploading ? (
+                        <div className="flex items-center gap-1.5 text-sky-700 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-600" />
+                          <span>Mengunggah foto ke Cloudinary...</span>
+                        </div>
+                      ) : cloudinaryStatus.isSuccess ? (
+                        <div className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-semibold">
+                          <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Foto Tersimpan di Cloudinary (Cloud)</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-slate-600 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+                          <ImageIcon className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Foto Tersimpan (Lokal / Base64)</span>
+                        </div>
+                      )}
+
+                      {imagePreview && (
+                        <span className="text-[10px] text-slate-400">
+                          {cloudinaryStatus.isSuccess ? 'URL Cloud Permanen' : 'Siap ke Data Master'}
                         </span>
                       )}
-                      <div className="text-[10px] text-slate-400">
-                        {aiResult.detectedText ? `Detail: ${aiResult.detectedText.slice(0, 40)}...` : ''}
-                      </div>
                     </div>
                   </div>
 
@@ -548,13 +656,18 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                             quotaGigabytes: aiResult.quotaGigabytes,
                             provider: aiResult.provider,
                             validityDays: aiResult.validityDays,
+                            handwrittenNote: aiResult.handwrittenNote,
+                            suggestedCost: aiResult.suggestedCost,
+                            suggestedPrice: aiResult.suggestedPrice,
+                            imageUrl: cloudinaryStatus.url || imagePreview || undefined,
+                            isCloudinaryUploaded: Boolean(cloudinaryStatus.isSuccess),
                           });
                           onClose();
                         }}
                         className="w-full py-2.5 px-4 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
                       >
                         <PackageCheck className="w-4 h-4" />
-                        <span>Gunakan Data Voucher Ini ke Form Master (Nama & Kuota)</span>
+                        <span>Gunakan Data Voucher Ini ke Form Master (Nama, Harga & Foto)</span>
                       </button>
                     </div>
                   )}
@@ -574,6 +687,11 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                             quotaGigabytes: aiResult.quotaGigabytes,
                             provider: aiResult.provider,
                             validityDays: aiResult.validityDays,
+                            handwrittenNote: aiResult.handwrittenNote,
+                            suggestedCost: aiResult.suggestedCost,
+                            suggestedPrice: aiResult.suggestedPrice,
+                            imageUrl: cloudinaryStatus.url || imagePreview || undefined,
+                            isCloudinaryUploaded: Boolean(cloudinaryStatus.isSuccess),
                           });
                           onClose();
                         }}
@@ -629,14 +747,27 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
                             key={prod.id}
                             className="bg-white p-3 rounded-xl border border-slate-200 hover:border-teal-500 hover:bg-teal-50/40 transition flex items-center justify-between gap-3 shadow-xs"
                           >
-                            <div>
-                              <div className="font-bold text-xs text-slate-800">{prod.name}</div>
-                              <div className="text-[11px] text-slate-400">
-                                {prod.category} • Stok: {prod.stock} {prod.unit}
+                            <div className="flex items-center gap-2.5">
+                              {prod.imageUrl ? (
+                                <img
+                                  src={prod.imageUrl}
+                                  alt={prod.name}
+                                  className="w-10 h-10 object-cover rounded-xl border border-slate-200 shrink-0"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center font-bold text-[10px] shrink-0 border border-teal-100">
+                                  VCR
+                                </div>
+                              )}
+                              <div>
+                                <div className="font-bold text-xs text-slate-800">{prod.name}</div>
+                                <div className="text-[11px] text-slate-400">
+                                  {prod.category} • Stok: {prod.stock} {prod.unit}
+                                </div>
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 shrink-0">
                               <div className="font-extrabold text-xs text-teal-800">
                                 {formatRupiah(prod.price)}
                               </div>
