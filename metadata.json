@@ -1,0 +1,6 @@
+{
+  "name": "CatatUsaha - Kasir & Pembukuan Realtime",
+  "description": "Aplikasi kasir POS dan pembukuan usaha terintegrasi Firebase Realtime dengan manajemen pengguna, cetak nota, dan laporan penjualan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

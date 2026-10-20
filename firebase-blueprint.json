@@ -1,0 +1,186 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "Barang, BBM, atau menu yang dijual dalam usaha",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 50 },
+        "sku": { "type": "string", "maxLength": 50 },
+        "price": { "type": "number" },
+        "cost": { "type": "number" },
+        "stock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "unit": { "type": "string", "maxLength": 20 },
+        "isFuel": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "category", "price", "stock"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Data transaksi penjualan kasir",
+      "type": "object",
+      "properties": {
+        "invoiceNumber": { "type": "string", "maxLength": 50 },
+        "cashierName": { "type": "string", "maxLength": 100 },
+        "cashierId": { "type": "string", "maxLength": 100 },
+        "customerName": { "type": "string", "maxLength": 100 },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "number" },
+        "totalCost": { "type": "number" },
+        "totalProfit": { "type": "number" },
+        "discount": { "type": "number" },
+        "finalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "maxLength": 30 },
+        "amountPaid": { "type": "number" },
+        "change": { "type": "number" },
+        "status": { "type": "string", "maxLength": 20 },
+        "dateString": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["invoiceNumber", "items", "finalAmount", "paymentMethod", "status"]
+    },
+    "Expense": {
+      "title": "Expense",
+      "description": "Catatan pengeluaran operasional usaha",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 100 },
+        "category": { "type": "string", "maxLength": 50 },
+        "amount": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 255 },
+        "createdBy": { "type": "string", "maxLength": 100 },
+        "dateString": { "type": "string", "maxLength": 20 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "amount", "category"]
+    },
+    "Debt": {
+      "title": "Debt",
+      "description": "Pencatatan kas bon / hutang piutang pelanggan",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string", "maxLength": 100 },
+        "customerPhone": { "type": "string", "maxLength": 30 },
+        "amount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "description": { "type": "string", "maxLength": 255 },
+        "dueDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["unpaid", "partial", "paid"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["customerName", "amount", "status"]
+    },
+    "PsRental": {
+      "title": "PsRental",
+      "description": "Sistem rental PlayStation realtime",
+      "type": "object",
+      "properties": {
+        "unitName": { "type": "string", "maxLength": 50 },
+        "psType": { "type": "string", "maxLength": 20 },
+        "hourlyRate": { "type": "number" },
+        "halfHourlyRate": { "type": "number" },
+        "status": { "type": "string", "enum": ["available", "in_use", "finished"] },
+        "customerName": { "type": "string", "maxLength": 100 },
+        "customerPhone": { "type": "string", "maxLength": 30 },
+        "startTime": { "type": "string" },
+        "durationMinutes": { "type": "number" },
+        "durationHours": { "type": "number" },
+        "expectedEndTime": { "type": "string" },
+        "totalCost": { "type": "number" },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "paid"] },
+        "notes": { "type": "string", "maxLength": 255 },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["unitName", "hourlyRate", "status"]
+    },
+    "PsSavedTime": {
+      "title": "PsSavedTime",
+      "description": "Tabungan sisa waktu bermain rental PS untuk pelanggan",
+      "type": "object",
+      "properties": {
+        "customerName": { "type": "string", "maxLength": 100 },
+        "customerPhone": { "type": "string", "maxLength": 30 },
+        "remainingMinutes": { "type": "number" },
+        "savedFromUnitId": { "type": "string", "maxLength": 50 },
+        "savedFromUnitName": { "type": "string", "maxLength": 50 },
+        "psType": { "type": "string", "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 255 },
+        "savedAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["active", "used"] },
+        "usedAt": { "type": "string" },
+        "usedInUnitName": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["customerName", "remainingMinutes", "status"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Pengaturan informasi usaha dan struk",
+      "type": "object",
+      "properties": {
+        "businessName": { "type": "string", "maxLength": 100 },
+        "address": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "receiptFooter": { "type": "string", "maxLength": 200 },
+        "taxPercent": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["businessName"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Data profil pengguna dan role",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 100 },
+        "username": { "type": "string", "maxLength": 50 },
+        "password": { "type": "string", "maxLength": 100 },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["admin", "kasir"] },
+        "phone": { "type": "string", "maxLength": 30 },
+        "notes": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["role"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Koleksi data master produk, barang dan stok BBM"
+    },
+    "/transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Koleksi data transaksi penjualan harian kasir"
+    },
+    "/expenses/{expenseId}": {
+      "schema": "Expense",
+      "description": "Koleksi pencatatan pengeluaran operasional usaha"
+    },
+    "/debts/{debtId}": {
+      "schema": "Debt",
+      "description": "Koleksi catatan hutang piutang pelanggan"
+    },
+    "/ps_rentals/{rentalId}": {
+      "schema": "PsRental",
+      "description": "Koleksi status dan sesi rental playstation"
+    },
+    "/ps_saved_times/{savedTimeId}": {
+      "schema": "PsSavedTime",
+      "description": "Koleksi tabungan sisa waktu bermain rental playstation"
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Pengaturan profil toko/usaha dan cetak struk"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Data pengguna dan hak akses aplikasi"
+    }
+  }
+}
