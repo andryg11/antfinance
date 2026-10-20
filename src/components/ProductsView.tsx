@@ -172,10 +172,12 @@ export const ProductsView: React.FC = () => {
   });
   const [isTierSaved, setIsTierSaved] = useState(false);
 
-  // Filtered Products
+  // Filtered Products for Table
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
       const isRange = p.masterType === 'ppob_range' || p.category.toLowerCase().includes('ppob range');
+      // In 'all' or 'barang', do not repeat PPOB Range items in the table below (they are displayed in Section A cards)
+      if (activeMasterTab === 'all' && isRange) return false;
       if (activeMasterTab === 'barang' && isRange) return false;
       if (activeMasterTab === 'ppob_range' && !isRange) return false;
 
@@ -504,57 +506,90 @@ export const ProductsView: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs Filter Bar */}
-      <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-1.5 text-xs">
-          {[
-            { id: 'all', label: 'Semua Master', icon: Layers },
-            { id: 'barang', label: 'Barang, Pulsa & BBM', icon: Package },
-            { id: 'ppob_range', label: 'PPOB Range (DANA/Transfer)', icon: Smartphone },
-            { id: 'ps', label: 'Rental PlayStation', icon: Gamepad2 },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeMasterTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveMasterTab(tab.id as any)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold transition cursor-pointer ${
-                  isActive
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Search Bar with Scan Button parallel (consistent with Kasir) */}
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-          <div className="relative flex-1 sm:w-64">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-            <input
-              type="text"
-              placeholder="Cari data master (nama, SKU)..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-1 focus:ring-teal-500"
-            />
-            {/* Shortcut camera inside search bar */}
+      {/* SEARCH BAR & SCAN BUTTON SEJAJAR (SESUAI KASIR - KAMERA HP & AI VISION) */}
+      <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-sm space-y-3">
+        <div className="flex items-center justify-between">
+          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+            <ScanLine className="w-4 h-4 text-teal-600" />
+            <span>Pencarian & Scan Data Master (Kamera HP & AI Vision)</span>
+          </label>
+          {searchQuery && (
             <button
               type="button"
-              onClick={() => {
-                setScannerContext('master_search');
-                setIsScannerOpen(true);
-              }}
-              title="Buka kamera untuk scan Barcode atau Voucher"
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-teal-600 transition p-1 cursor-pointer"
+              onClick={() => setSearchQuery('')}
+              className="text-xs text-teal-700 hover:text-teal-900 font-semibold"
             >
-              <Camera className="w-3.5 h-3.5" />
+              Hapus Filter Pencarian
             </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5" />
+            <input
+              type="text"
+              placeholder="Cari data master: nama barang, SKU barcode, pulsa, voucher kuota (GB)..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-12 pr-10 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm font-semibold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-teal-500 focus:bg-white transition"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                title="Hapus pencarian"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setScannerContext('master_search');
+                  setIsScannerOpen(true);
+                }}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-teal-600 hover:text-teal-700 p-1 rounded-lg"
+                title="Scan dengan Kamera HP"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+
+          {/* Tombol Scan Sejajar dengan Bar Pencarian - Mengarah ke Kamera HP (AI Vision Kuota GB & Barcode/QR) */}
+          <button
+            type="button"
+            onClick={() => {
+              setScannerContext('master_search');
+              setIsScannerOpen(true);
+            }}
+            className="h-[50px] px-3.5 sm:px-5 bg-teal-600 hover:bg-teal-700 active:scale-95 text-white rounded-2xl flex items-center justify-center gap-2 shadow-sm transition shrink-0 cursor-pointer group"
+            title="Scan Voucher Kuota GB (AI Vision) / Barcode & QR Code Data Master"
+          >
+            <Camera className="w-5 h-5 group-hover:scale-110 transition" />
+            <div className="text-left">
+              <div className="text-xs font-bold leading-tight flex items-center gap-1">
+                <span>Scan</span>
+                <ScanLine className="w-3 h-3 text-teal-200" />
+              </div>
+              <div className="text-[10px] text-teal-100 font-medium hidden sm:block">Kamera HP & AI</div>
+            </div>
+          </button>
+        </div>
+
+        {/* Petunjuk AI Vision & Barcode Scan */}
+        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-100 gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-50 text-teal-800 rounded-lg font-medium">
+              <Camera className="w-3 h-3 text-teal-600" />
+              <b>AI Vision:</b> Foto voucher kuota fisik → baca GB & nama paket
+            </span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-50 text-blue-800 rounded-lg font-medium">
+              <ScanLine className="w-3 h-3 text-blue-600" />
+              <b>Barcode / QR:</b> Kamera langsung scan barcode produk
+            </span>
           </div>
 
           <button
@@ -563,14 +598,39 @@ export const ProductsView: React.FC = () => {
               setScannerContext('master_search');
               setIsScannerOpen(true);
             }}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-xs whitespace-nowrap cursor-pointer shrink-0"
-            title="Scan Barcode produk atau Voucher Kuota dengan Kamera HP"
+            className="text-xs text-teal-700 hover:text-teal-900 font-bold hover:underline flex items-center gap-1"
           >
-            <ScanLine className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Scan (Kamera & AI)</span>
-            <span className="sm:hidden">Scan</span>
+            <span>Buka Scanner Kamera</span>
+            <span>→</span>
           </button>
         </div>
+      </div>
+
+      {/* Tabs Filter Bar */}
+      <div className="bg-white p-2.5 sm:p-3 rounded-2xl border border-slate-100 shadow-xs flex flex-wrap gap-1.5 text-xs">
+        {[
+          { id: 'all', label: 'Semua Master', icon: Layers },
+          { id: 'barang', label: 'Barang, Pulsa & BBM', icon: Package },
+          { id: 'ppob_range', label: 'PPOB Range (DANA/Transfer)', icon: Smartphone },
+          { id: 'ps', label: 'Rental PlayStation', icon: Gamepad2 },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeMasterTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveMasterTab(tab.id as any)}
+              className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-bold transition cursor-pointer ${
+                isActive
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* SUB-SECTION A: DAFTAR LAYANAN PPOB RANGE DENGAN ATURAN RANGE MANDIRI */}
@@ -682,16 +742,16 @@ export const ProductsView: React.FC = () => {
         </div>
       )}
 
-      {/* SUB-SECTION B: DATA MASTER BARANG, PULSA & PPOB */}
-      {activeMasterTab !== 'ps' && (
+      {/* SUB-SECTION B: DATA MASTER BARANG, PULSA & BBM */}
+      {activeMasterTab !== 'ps' && activeMasterTab !== 'ppob_range' && (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-xs overflow-hidden">
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
               <Package className="w-4 h-4 text-teal-600" />
-              Daftar Barang, Pulsa & Layanan PPOB ({filteredProducts.length})
+              Daftar Barang, Pulsa & BBM ({filteredProducts.length})
             </h3>
             <span className="text-[11px] text-slate-400">
-              Pulsa masuk ke barang dengan harga jual dan modal tetap
+              Barang fisik, pulsa nominal tetap, voucher kuota data & BBM
             </span>
           </div>
 
@@ -709,65 +769,100 @@ export const ProductsView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredProducts.map((p) => {
-                  const isRange = p.masterType === 'ppob_range' || p.category.toLowerCase().includes('ppob range');
-                  const isPulsa = p.category.toLowerCase().includes('pulsa');
-                  const margin = p.price - p.cost;
-
-                  return (
-                    <tr key={p.id} className="hover:bg-slate-50/70 transition">
-                      <td className="px-4 py-3">
-                        <div className="font-semibold text-slate-800">{p.name}</div>
-                        <div className="text-[10px] font-mono text-slate-400">{p.sku || '-'}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
-                            isRange
-                              ? 'bg-blue-100 text-blue-700'
-                              : isPulsa
-                              ? 'bg-purple-100 text-purple-700'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}
+                {filteredProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-10 text-center text-slate-400">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Package className="w-8 h-8 text-slate-300" />
+                        <p className="text-xs">Tidak ada produk yang cocok dengan pencarian "{searchQuery}".</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerContext('master_search');
+                            setIsScannerOpen(true);
+                          }}
+                          className="mt-1 px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
                         >
-                          {p.category}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-semibold text-teal-700">
-                        {isRange ? <span className="text-blue-700 font-bold">Nominal Fleksibel</span> : formatRupiah(p.price)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600">
-                        {isRange ? '-' : formatRupiah(p.cost)}
-                      </td>
-                      <td className="px-4 py-3">
-                        {isRange ? (
-                          <span className="text-blue-600 font-medium">+ Sesuai Tier Admin</span>
-                        ) : (
-                          <span className="text-emerald-700 font-bold">+{formatRupiah(margin)}</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 font-bold text-slate-700">
-                        {isRange ? '∞' : `${p.stock} ${p.unit}`}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end space-x-1">
+                          <Camera className="w-3.5 h-3.5" />
+                          <span>Scan Barcode Kamera untuk Cari / Daftarkan</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredProducts.map((p) => {
+                    const isRange = p.masterType === 'ppob_range' || p.category.toLowerCase().includes('ppob range');
+                    const isPulsa = p.category.toLowerCase().includes('pulsa');
+                    const margin = p.price - p.cost;
+
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50/70 transition">
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-slate-800">{p.name}</div>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            {p.sku ? (
+                              <span className="text-[10px] font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1 border border-slate-200" title="Kode Barcode / SKU">
+                                <ScanLine className="w-2.5 h-2.5 text-teal-600" />
+                                {p.sku}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic">Tanpa barcode</span>
+                            )}
+                            {p.isFuel && (
+                              <span className="text-[9px] text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                BBM Liter
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
+                              isRange
+                                ? 'bg-blue-100 text-blue-700'
+                                : isPulsa
+                                ? 'bg-purple-100 text-purple-700'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {p.category}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-teal-700">
+                          {isRange ? <span className="text-blue-700 font-bold">Nominal Fleksibel</span> : formatRupiah(p.price)}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">
+                          {isRange ? '-' : formatRupiah(p.cost)}
+                        </td>
+                        <td className="px-4 py-3">
                           {isRange ? (
-                            <button
-                              onClick={() => handleEditPpob(p)}
-                              className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition"
-                              title="Edit Range & Layanan PPOB"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
+                            <span className="text-blue-600 font-medium">+ Sesuai Tier Admin</span>
                           ) : (
-                            <button
-                              onClick={() => handleEditProduct(p)}
-                              className="p-1.5 text-slate-500 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition"
-                              title="Edit Barang / Pulsa"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" />
-                            </button>
+                            <span className="text-emerald-700 font-bold">+{formatRupiah(margin)}</span>
                           )}
+                        </td>
+                        <td className="px-4 py-3 font-bold text-slate-700">
+                          {isRange ? '∞' : `${p.stock} ${p.unit}`}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end space-x-1">
+                            {isRange ? (
+                              <button
+                                onClick={() => handleEditPpob(p)}
+                                className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-lg transition"
+                                title="Edit Range & Layanan PPOB"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleEditProduct(p)}
+                                className="p-1.5 text-slate-500 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition"
+                                title="Edit Barang / Pulsa"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           {isAdmin && (
                             <button
                               onClick={() => deleteProduct(p.id)}
@@ -781,7 +876,7 @@ export const ProductsView: React.FC = () => {
                       </td>
                     </tr>
                   );
-                })}
+                }))}
               </tbody>
             </table>
           </div>

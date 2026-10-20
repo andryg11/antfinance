@@ -89,6 +89,7 @@ interface DataContextType {
   // Settings & seed
   updateSettings: (newSettings: Partial<BusinessSettings>) => Promise<void>;
   seedInitialData: () => Promise<void>;
+  cleanDuplicateProducts: () => Promise<{ deletedCount: number; remainingCount: number }>;
   resetAllData: () => Promise<void>;
 }
 
@@ -293,8 +294,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       q,
       (snapshot) => {
         const list: Product[] = [];
-        snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...doc.data() } as Product);
+        const seenIds = new Set<string>();
+        const seenKeys = new Set<string>();
+        snapshot.forEach((docSnap) => {
+          const item = { id: docSnap.id, ...docSnap.data() } as Product;
+          const key = (item.sku?.trim().toLowerCase()) || (item.name?.trim().toLowerCase() + '___' + (item.category || '').trim().toLowerCase());
+          if (!seenIds.has(item.id) && !seenKeys.has(key)) {
+            seenIds.add(item.id);
+            seenKeys.add(key);
+            list.push(item);
+          }
         });
         setProducts(list);
         setIsRealtimeConnected(true);
@@ -423,47 +432,82 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 
 
+  const cleanDuplicateProducts = async () => {
+    try {
+      setIsSyncing(true);
+      const snap = await getDocs(collection(db, 'products'));
+      const seen = new Map<string, string>();
+      const toDelete: string[] = [];
+      const docs: Product[] = [];
+      snap.forEach(d => docs.push({ id: d.id, ...d.data() } as Product));
+      for (const item of docs) {
+        const normName = (item.name || '').trim().toLowerCase();
+        const normSku = (item.sku || '').trim().toLowerCase();
+        const normCat = (item.category || '').trim().toLowerCase();
+        const key = normSku ? normSku : `${normName}___${normCat}`;
+        if (seen.has(key)) {
+          toDelete.push(item.id);
+        } else {
+          seen.set(key, item.id);
+        }
+      }
+      for (const id of toDelete) {
+        await deleteDoc(doc(db, 'products', id));
+      }
+      return { deletedCount: toDelete.length, remainingCount: seen.size };
+    } catch (err) {
+      console.error('Error deduplicating products:', err);
+      throw err;
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const seedInitialData = async () => {
     try {
       setIsSyncing(true);
-      // Products
+      const now = new Date().toISOString();
+
+      // Products with deterministic doc IDs (prevents duplicates)
       for (const p of SAMPLE_PRODUCTS) {
-        const newDocRef = doc(collection(db, 'products'));
-        const now = new Date().toISOString();
-        await setDoc(newDocRef, {
+        const docId = 'prod_' + (p.sku || p.name).toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const pRef = doc(db, 'products', docId);
+        await setDoc(pRef, {
           ...p,
           createdAt: now,
           updatedAt: now,
-        });
+        }, { merge: true });
       }
 
       // Settings
       await setDoc(doc(db, 'settings', 'business_profile'), {
         ...DEFAULT_SETTINGS,
-        updatedAt: new Date().toISOString(),
-      });
+        updatedAt: now,
+      }, { merge: true });
 
-      // PS Rentals
+      // PS Rentals with deterministic IDs
       for (const r of SAMPLE_PS_RENTALS) {
-        const rRef = doc(collection(db, 'ps_rentals'));
+        const rDocId = 'ps_' + r.unitName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const rRef = doc(db, 'ps_rentals', rDocId);
         await setDoc(rRef, {
           ...r,
-          updatedAt: new Date().toISOString(),
-        });
+          updatedAt: now,
+        }, { merge: true });
       }
 
-      // Debts
+      // Debts with deterministic IDs
       for (const d of SAMPLE_DEBTS) {
-        const dRef = doc(collection(db, 'debts'));
+        const dDocId = 'debt_' + d.customerName.toLowerCase().replace(/[^a-z0-9]/g, '_');
+        const dRef = doc(db, 'debts', dDocId);
         await setDoc(dRef, {
           ...d,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
+          createdAt: now,
+          updatedAt: now,
+        }, { merge: true });
       }
 
       // Initial expense
-      const sampleExpenseRef = doc(collection(db, 'expenses'));
+      const sampleExpenseRef = doc(db, 'expenses', 'exp_init_token');
       const todayStr = new Date().toISOString().split('T')[0];
       await setDoc(sampleExpenseRef, {
         title: 'Beli Bahan Baku & Listrik Token',
@@ -472,8 +516,8 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         notes: 'Token listrik rental & kantong plastik',
         createdBy: userProfile?.displayName || 'Admin',
         dateString: todayStr,
-        createdAt: new Date().toISOString(),
-      });
+        createdAt: now,
+      }, { merge: true });
     } catch (err) {
       console.error('Seed data error', err);
     } finally {
@@ -1183,6 +1227,7 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
         deletePsUnit,
         updateSettings,
         seedInitialData,
+        cleanDuplicateProducts,
         resetAllData,
       }}
     >

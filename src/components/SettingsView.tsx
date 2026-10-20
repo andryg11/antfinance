@@ -37,7 +37,8 @@ export const SettingsView: React.FC = () => {
     adminResetUserPassword
   } = useAuth();
   
-  const { settings, updateSettings, seedInitialData, resetAllData, isSyncing } = useData();
+  const { settings, updateSettings, seedInitialData, cleanDuplicateProducts, resetAllData, isSyncing } = useData();
+  const [dedupMsg, setDedupMsg] = useState<string | null>(null);
 
   const isAdmin = userProfile?.role === 'admin';
 
@@ -881,13 +882,37 @@ export const SettingsView: React.FC = () => {
           </div>
 
           <div className="space-y-3 pt-2">
+            {dedupMsg && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs font-semibold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{dedupMsg}</span>
+              </div>
+            )}
+
+            <button
+              onClick={async () => {
+                try {
+                  const res = await cleanDuplicateProducts();
+                  setDedupMsg(`Pembersihan sukses: ${res.deletedCount} data dobel dihapus. Tersisa ${res.remainingCount} produk unik.`);
+                  setTimeout(() => setDedupMsg(null), 5000);
+                } catch (e: any) {
+                  setDedupMsg(`Gagal membersihkan: ${e.message}`);
+                }
+              }}
+              disabled={isSyncing}
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-teal-50 hover:bg-teal-100 text-teal-800 font-bold rounded-2xl text-xs transition cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4 text-teal-600" />
+              <span>Bersihkan Data Master Dobel (Deduplikasi Otomatis)</span>
+            </button>
+
             <button
               onClick={() => seedInitialData()}
               disabled={isSyncing}
               className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-slate-800 font-bold rounded-2xl text-xs transition cursor-pointer"
             >
               <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Memuat Data...' : 'Muat Ulang Data Sampel'}</span>
+              <span>{isSyncing ? 'Memuat Data...' : 'Muat Ulang Data Sampel (BBM, Pulsa & Voucher)'}</span>
             </button>
 
             <button
