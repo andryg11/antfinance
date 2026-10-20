@@ -67,25 +67,43 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
   "detectedText": "Ringkasan tulisan penting yang terbaca"
 }`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: [
-          {
-            role: 'user',
-            parts: [
+      const modelsToTry = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
+      let lastError: any = null;
+      let response: any = null;
+
+      for (const modelName of modelsToTry) {
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
               {
-                inlineData: {
-                  mimeType,
-                  data: cleanBase64,
-                },
-              },
-              {
-                text: prompt,
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: cleanBase64,
+                    },
+                  },
+                  {
+                    text: prompt,
+                  },
+                ],
               },
             ],
-          },
-        ],
-      });
+          });
+          if (response && response.text) {
+            break;
+          }
+        } catch (mErr: any) {
+          lastError = mErr;
+          console.warn(`Model ${modelName} failed, trying next model:`, mErr?.message?.slice(0, 80));
+        }
+      }
+
+      if (!response || !response.text) {
+        throw lastError || new Error('Tidak ada respon dari model AI');
+      }
 
       const responseText = response.text || '';
       // Parse JSON from response
@@ -114,8 +132,21 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
       });
     } catch (err: any) {
       console.error('Error in /api/gemini/scan-voucher:', err);
+      let errMsg = 'Gagal menganalisis gambar voucher dengan AI.';
+      if (err?.message?.includes('503') || err?.message?.includes('high demand')) {
+        errMsg = 'Layanan AI sedang sibuk sementara. Silakan tekan ambil foto ulang beberapa detik lagi.';
+      } else if (err?.message) {
+        try {
+          const parsed = JSON.parse(err.message);
+          if (parsed?.error?.message) {
+            errMsg = parsed.error.message;
+          }
+        } catch {
+          errMsg = err.message;
+        }
+      }
       return res.status(500).json({
-        error: err.message || 'Gagal menganalisis gambar voucher dengan AI.',
+        error: errMsg,
       });
     }
   });
