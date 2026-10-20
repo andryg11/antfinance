@@ -29,7 +29,7 @@ export function getLocalCloudinaryConfig(): CloudinaryConfig {
   } catch (e) {
     console.warn('Failed to read Cloudinary config from localStorage', e);
   }
-  return { cloudName: '', uploadPreset: '' };
+  return { cloudName: 'cqwosuvb', uploadPreset: '' };
 }
 
 /**

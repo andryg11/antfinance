@@ -152,6 +152,7 @@ const DEFAULT_SETTINGS: BusinessSettings = {
   phone: '0812-3456-7890',
   receiptFooter: 'Terima Kasih Telah Berbelanja & Bertransaksi! Datang kembali ya!',
   adminFeeTiers: DEFAULT_ADMIN_TIERS,
+  cloudinaryCloudName: 'cqwosuvb',
 };
 
 const SAMPLE_PRODUCTS: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>[] = [

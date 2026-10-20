@@ -11,14 +11,17 @@ dotenv.config();
 // Ensure Vite HMR is disabled in cloud container proxy environment
 process.env.DISABLE_HMR = 'true';
 
-// Configure Cloudinary from environment if provided
+// Configure Cloudinary from environment or defaults
+const defaultCloudName = process.env.CLOUDINARY_CLOUD_NAME || 'cqwosuvb';
+const defaultApiKey = process.env.CLOUDINARY_API_KEY || '647282724887793';
+
 if (process.env.CLOUDINARY_URL) {
   cloudinary.config();
-} else if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_API_KEY && process.env.CLOUDINARY_API_SECRET) {
+} else {
   cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
+    cloud_name: defaultCloudName,
+    api_key: defaultApiKey,
+    api_secret: process.env.CLOUDINARY_API_SECRET || '',
     secure: true,
   });
 }
@@ -111,8 +114,8 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
       const modelsToTry = [
         'gemini-3.8-flash',
-        'gemini-3.1-flash-lite',
-        'gemini-flash-latest'
+        'gemini-flash-latest',
+        'gemini-3.1-flash-lite'
       ];
       let lastError: any = null;
       let response: any = null;
