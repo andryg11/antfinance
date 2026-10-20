@@ -376,8 +376,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     stopLiveCamera();
     setImagePreview(rawBase64);
 
-    // Keep sharp for OCR reading
-    const compressedBase64 = await resizeImage(rawBase64, 1600, 1600, 0.9);
+    // Keep sharp for OCR reading yet fast transmission (under 250KB)
+    const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.85);
 
     // Process with AI
     await analyzeVoucherWithAi(compressedBase64, 'image/jpeg', rawBase64);
@@ -399,7 +399,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       const rawBase64 = event.target?.result as string;
       setImagePreview(rawBase64);
 
-      const compressedBase64 = await resizeImage(rawBase64, 1600, 1600, 0.9);
+      const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.85);
       await analyzeVoucherWithAi(compressedBase64, file.type || 'image/jpeg', rawBase64);
     };
     reader.readAsDataURL(file);
@@ -512,9 +512,9 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 }`;
 
         const modelsToTry = [
+          'gemini-3.5-flash-lite',
           'gemini-flash-latest',
           'gemini-3.8-flash',
-          'gemini-3.1-flash-lite',
         ];
         let clientResp: any = null;
         for (const m of modelsToTry) {
@@ -533,6 +533,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
               config: {
                 temperature: 0.1,
                 maxOutputTokens: 600,
+                responseMimeType: 'application/json',
               },
             });
             if (clientResp && clientResp.text) break;

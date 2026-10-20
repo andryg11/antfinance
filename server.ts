@@ -133,11 +133,11 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks atau format l
   "detectedText": "Ringkasan tulisan cetak atau catatan spidol yang terlihat pada gambar"
 }`;
 
-      // Source of truth models per gemini-api skill for fast vision processing
+      // Source of truth fast vision models with lowest latency and highest accuracy
       const modelsToTry = [
+        'gemini-3.5-flash-lite',
         'gemini-flash-latest',
         'gemini-3.8-flash',
-        'gemini-3.1-flash-lite',
       ];
       let lastError: any = null;
       let response: any = null;
@@ -165,6 +165,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks atau format l
             config: {
               temperature: 0.1,
               maxOutputTokens: 600,
+              responseMimeType: 'application/json',
             },
           });
           if (response && response.text) {
