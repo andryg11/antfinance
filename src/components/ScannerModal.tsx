@@ -23,6 +23,8 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { Product } from '../types';
 import { formatRupiah } from '../utils/formatters';
 import { uploadToCloudinary } from '../utils/cloudinary';
+import { useData } from '../context/DataContext';
+import { GoogleGenAI } from '@google/genai';
 
 export interface ScannedVoucherData {
   name: string;
@@ -79,6 +81,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   sourceContext = 'pos',
   defaultTab,
 }) => {
+  const { settings } = useData();
   const [activeTab, setActiveTab] = useState<'ai_vision' | 'qr_barcode'>(
     defaultTab || (sourceContext === 'master_form' ? 'qr_barcode' : 'ai_vision')
   );
@@ -295,37 +298,106 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     e.target.value = '';
   };
 
-  // Call Server-side Gemini API for Voucher & Kuota Analysis
+  // Call Server-side or Client-side Gemini API for Voucher & Kuota Analysis
   const analyzeVoucherWithAi = async (base64Image: string, mimeType: string) => {
     setIsAiLoading(true);
     setAiError(null);
 
+    const apiKey = settings.geminiApiKey || localStorage.getItem('catatusaha_gemini_api_key') || '';
+
     try {
+      // Try server proxy first
       const res = await fetch('/api/gemini/scan-voucher', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imageBase64: base64Image,
           mimeType,
+          geminiApiKey: apiKey,
         }),
       });
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server merespon status ${res.status}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const data: AiScanResult = json.data;
+          setAiResult(data);
+          playBeep();
+          findMatchingProducts(data);
+          return;
+        }
       }
 
-      const json = await res.json();
-      if (!json.success || !json.data) {
-        throw new Error('Hasil deteksi AI tidak valid');
+      // Fallback: direct client-side GoogleGenAI execution if apiKey is configured
+      if (apiKey) {
+        const aiClient = new GoogleGenAI({
+          apiKey,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
+            },
+          },
+        });
+
+        const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+        const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang sangat ahli dan teliti dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter.
+Tugas Anda adalah menganalisis gambar voucher/kartu perdana/catatan konter ini dan mengekstrak data berikut secara cerdas:
+
+1. OPERATOR / PROVIDER (Tri, Telkomsel, Indosat, XL, Axis, Smartfren)
+2. TULISAN TANGAN / SPIDOL (misal "10/3" artinya 10GB 3 hari)
+3. NAMA PRODUK & KATA KUNCI DATA MASTER
+
+Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
+{
+  "provider": "Nama Provider",
+  "quota": "10 GB",
+  "quotaGigabytes": 10,
+  "validityDays": "3 Hari",
+  "handwrittenNote": "10/3",
+  "productName": "Voucher Tri 10 GB (3 Hari)",
+  "searchKeyword": "Tri 10 GB",
+  "suggestedCost": 0,
+  "suggestedPrice": 0,
+  "detectedText": "teks terbaca"
+}`;
+
+        const modelsToTry = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+        let clientResp: any = null;
+        for (const m of modelsToTry) {
+          try {
+            clientResp = await aiClient.models.generateContent({
+              model: m,
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    { inlineData: { mimeType, data: cleanBase64 } },
+                    { text: prompt },
+                  ],
+                },
+              ],
+            });
+            if (clientResp && clientResp.text) break;
+          } catch (cErr) {
+            console.warn(`Client fallback model ${m} error:`, cErr);
+          }
+        }
+
+        if (clientResp && clientResp.text) {
+          const respText = clientResp.text;
+          const jsonMatch = respText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            setAiResult(parsed);
+            playBeep();
+            findMatchingProducts(parsed);
+            return;
+          }
+        }
       }
 
-      const data: AiScanResult = json.data;
-      setAiResult(data);
-      playBeep();
-
-      // Find matching products in Data Master
-      findMatchingProducts(data);
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || `Gagal menganalisis gambar. Pastikan Gemini API Key sudah dimasukkan di Pengaturan Usaha.`);
     } catch (err: any) {
       console.error('Scan voucher error:', err);
       setAiError(

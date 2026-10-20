@@ -142,6 +142,7 @@ export interface BusinessSettings {
   cloudinaryCloudName?: string;
   cloudinaryUploadPreset?: string;
   cloudinaryApiKey?: string;
+  geminiApiKey?: string;
   updatedAt?: string;
 }
 

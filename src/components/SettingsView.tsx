@@ -58,9 +58,23 @@ export const SettingsView: React.FC = () => {
     cloudName: settings.cloudinaryCloudName || localCloud.cloudName || '',
     uploadPreset: settings.cloudinaryUploadPreset || localCloud.uploadPreset || '',
   });
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState(
+    settings.geminiApiKey || localStorage.getItem('catatusaha_gemini_api_key') || ''
+  );
+  const [geminiSaveMsg, setGeminiSaveMsg] = useState<string | null>(null);
   const [cloudinarySaveMsg, setCloudinarySaveMsg] = useState<string | null>(null);
   const [cloudinaryTestMsg, setCloudinaryTestMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isTestingCloudinary, setIsTestingCloudinary] = useState(false);
+
+  const handleSaveGeminiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGeminiSaveMsg(null);
+    const keyTrim = geminiApiKeyInput.trim();
+    localStorage.setItem('catatusaha_gemini_api_key', keyTrim);
+    await updateSettings({ geminiApiKey: keyTrim });
+    setGeminiSaveMsg('Gemini API Key berhasil disimpan!');
+    setTimeout(() => setGeminiSaveMsg(null), 4000);
+  };
 
   // Store form state (Admin only)
   const [storeForm, setStoreForm] = useState({
@@ -1074,6 +1088,59 @@ export const SettingsView: React.FC = () => {
               </button>
             </div>
           </form>
+
+          {/* Form Konfigurasi Gemini API Key */}
+          <div className="pt-6 border-t border-slate-100 space-y-4">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 rounded-2xl bg-amber-50 text-amber-700">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+                  <span>Gemini API Key (AI Vision Scanner)</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                    AI Key
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Masukkan Gemini API Key Anda agar pemindaian AI Voucher / Kuota berjalan lancar di Vercel atau hosting eksternal
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveGeminiKey} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-700 font-bold mb-1">
+                  Gemini API Key (AIza...)
+                </label>
+                <input
+                  type="password"
+                  placeholder="AIzaSy..."
+                  value={geminiApiKeyInput}
+                  onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-amber-500 focus:bg-white font-mono text-slate-900"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Dapatkan kunci gratis di Google AI Studio. Sangat penting jika dijalankan di Vercel agar AI tidak gagal mendeteksi.
+                </span>
+              </div>
+
+              {geminiSaveMsg && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{geminiSaveMsg}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-3 bg-amber-600 hover:bg-amber-700 active:scale-98 text-white font-bold rounded-2xl text-xs shadow-sm transition flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>Simpan Gemini API Key</span>
+              </button>
+            </form>
+          </div>
 
           {/* Panduan Lengkap Langkah Demi Langkah */}
           <div className="p-5 bg-gradient-to-br from-sky-50/60 to-blue-50/60 border border-sky-200/80 rounded-2xl space-y-4">

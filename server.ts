@@ -52,15 +52,27 @@ async function startServer() {
   // Endpoint to scan voucher/kuota perdana using Gemini Multimodal Vision
   app.post('/api/gemini/scan-voucher', async (req, res) => {
     try {
-      const { imageBase64, mimeType = 'image/jpeg' } = req.body;
+      const { imageBase64, mimeType = 'image/jpeg', geminiApiKey } = req.body;
+      const effectiveApiKey = geminiApiKey || process.env.GEMINI_API_KEY;
 
       if (!imageBase64) {
         return res.status(400).json({ error: 'Data gambar (base64) diperlukan.' });
       }
 
-      if (!ai) {
+      const requestAi = effectiveApiKey
+        ? new GoogleGenAI({
+            apiKey: effectiveApiKey,
+            httpOptions: {
+              headers: {
+                'User-Agent': 'aistudio-build',
+              },
+            },
+          })
+        : ai;
+
+      if (!requestAi) {
         return res.status(500).json({
-          error: 'GEMINI_API_KEY belum dikonfigurasi di server secrets.',
+          error: 'GEMINI_API_KEY belum dikonfigurasi. Masukkan Gemini API Key di Pengaturan Usaha atau environment Vercel.',
         });
       }
 
@@ -122,7 +134,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
       for (const modelName of modelsToTry) {
         try {
-          response = await ai.models.generateContent({
+          response = await requestAi.models.generateContent({
             model: modelName,
             contents: [
               {
