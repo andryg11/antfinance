@@ -1369,10 +1369,25 @@ export const ProductsView: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Inputan Modal & Inputan Jual sesuai urutan permintaan user */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-600 font-medium mb-1">
-                      Harga Jual (Rp) *
+                    <label className="block text-slate-700 font-bold text-xs mb-1">
+                      Modal (Harga Beli) *
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      required
+                      value={formatNumberWithDots(barangForm.cost)}
+                      onChange={(e) => setBarangForm({ ...barangForm, cost: parseNumberFromDots(e.target.value) })}
+                      placeholder="0"
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-extrabold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-bold text-xs mb-1">
+                      Harga Jual *
                     </label>
                     <input
                       type="text"
@@ -1384,46 +1399,35 @@ export const ProductsView: React.FC = () => {
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-extrabold text-teal-800"
                     />
                   </div>
-                  <div>
-                    <label className="block text-slate-600 font-medium mb-1">
-                      Harga Modal / Beli (HPP) *
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      required
-                      value={formatNumberWithDots(barangForm.cost)}
-                      onChange={(e) => setBarangForm({ ...barangForm, cost: parseNumberFromDots(e.target.value) })}
-                      placeholder="0"
-                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-extrabold text-slate-700"
-                    />
-                  </div>
                 </div>
 
                 <div className="p-3 bg-teal-50 rounded-xl border border-teal-100 flex items-center justify-between">
-                  <span className="text-teal-900 font-medium">Keuntungan (Margin):</span>
+                  <span className="text-teal-900 font-medium text-xs">Estimasi Keuntungan (Margin):</span>
                   <span className="font-bold text-teal-800 text-sm">
                     +{formatRupiah(Math.max(0, barangForm.price - barangForm.cost))}
                   </span>
                 </div>
 
+                {/* Inputan Berapa Jumlahnya */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-slate-600 font-medium mb-1">Stok Awal</label>
+                    <label className="block text-slate-700 font-bold text-xs mb-1">
+                      Berapa Jumlahnya (Stok Pcs) *
+                    </label>
                     <input
                       type="text"
                       inputMode="numeric"
                       value={formatNumberWithDots(barangForm.stock)}
                       onChange={(e) => setBarangForm({ ...barangForm, stock: parseNumberFromDots(e.target.value) })}
-                      placeholder="0"
+                      placeholder="10"
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold"
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-600 font-medium mb-1">Satuan</label>
+                    <label className="block text-slate-600 font-medium text-xs mb-1">Satuan</label>
                     <input
                       type="text"
-                      placeholder="Trx / Pcs / Liter"
+                      placeholder="Pcs / Trx"
                       value={barangForm.unit}
                       onChange={(e) => setBarangForm({ ...barangForm, unit: e.target.value })}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500"

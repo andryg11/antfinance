@@ -79,11 +79,11 @@ async function startServer() {
       // Clean base64 string if it contains data URI prefix
       const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
-      const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang sangat ahli dan teliti dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter.
-Tugas Anda adalah menganalisis gambar voucher/kartu perdana/catatan konter ini dan mengekstrak data berikut secara cerdas:
+      const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang SANGAT TELITI, CEPAT, dan AKURAT dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter pulsa.
+Tugas Anda adalah menganalisis gambar voucher / kartu perdana / tulisan spidol ini dengan sangat cermat dan mengekstrak data berikut:
 
 1. OPERATOR / PROVIDER:
-   - Kenali nama provider dari logo resmi, tulisan cetak, warna kartu, maupun singkatan/tulisan tangan:
+   - Kenali nama provider dari logo resmi, tulisan cetak, warna kartu, atau singkatan:
      * "Tri" / "3" / "Three"
      * "Telkomsel" / "Tsel" / "Simpati" / "AS" / "by.U"
      * "Indosat" / "IM3" / "Ooredoo"
@@ -91,44 +91,53 @@ Tugas Anda adalah menganalisis gambar voucher/kartu perdana/catatan konter ini d
      * "Axis" / "Aigo"
      * "Smartfren" / "SF"
 
-2. TULISAN TANGAN / SPIDOL PENJUAL KONTER (SANGAT PENTING):
-   - Di konter pulsa Indonesia, pemilik konter sering menuliskan ringkasan dengan SPIDOL di bagian depan atau belakang kartu/voucher, misalnya "10/3", "tri 10/3", "3/5", "1.5/3", "2/5", "5/7", "10/30".
-     * Pola angka "X/Y" seperti "10/3": ARTINYA X = Kuota GB (10 GB), dan Y = Masa Aktif (3 Hari). Jadi "10/3" = Kuota 10 GB, Masa aktif 3 Hari!
-     * Pola "3/5" = Kuota 3 GB, Masa aktif 5 Hari.
-     * Pola "1.5/3" = Kuota 1.5 GB, Masa aktif 3 Hari.
-     * Pola "10/30" = Kuota 10 GB, Masa aktif 30 Hari.
-     * Catat tulisan spidol persis yang terbaca di field "handwrittenNote" (contoh: "10/3").
-   - Jika terdapat harga modal atau harga jual yang ditulis spidol (misal: "m18" / "j22" / "22k"), ekstrak sebagai saran harga.
-   - Bila voucher mencantumkan kuota cetak pabrik (misal "Total Kuota 10 GB"), gunakan itu sebagai acuan atau gabungkan dengan catatan spidol jika voucher merupakan injeksi kuota khusus.
+2. KUOTA (GB) & MASA AKTIF (HARI):
+   - Baca tulisan kuota cetak (misal: "14 GB", "10 GB", "2 GB", "3 GB", "5 GB", "35 GB", "1.5 GB", "1.2 GB").
+   - Baca masa aktif cetak (misal: "3 Hari", "5 Hari", "7 Hari", "14 Hari", "30 Hari", "60 Hari").
+   - SANGAT PENTING - TULISAN TANGAN / SPIDOL PENJUAL KONTER:
+     Pemilik konter pulsa di Indonesia SANGAT SERING menulis ringkasan dengan SPIDOL di kartu/voucher, misalnya format angka "X/Y":
+     * "10/3" -> Kuota: 10 GB, Masa Aktif: 3 Hari
+     * "3/5" -> Kuota: 3 GB, Masa Aktif: 5 Hari
+     * "1.5/3" -> Kuota: 1.5 GB, Masa Aktif: 3 Hari
+     * "14/30" -> Kuota: 14 GB, Masa Aktif: 30 Hari
+     * "2/3" -> Kuota: 2 GB, Masa Aktif: 3 Hari
+     * "25/30" -> Kuota: 25 GB, Masa Aktif: 30 Hari
+     * "6/5" -> Kuota: 6 GB, Masa Aktif: 5 Hari
+     Jika menemukan tulisan format angka "X/Y" seperti ini, artikan X sebagai Kuota GB dan Y sebagai Masa Aktif Hari.
 
-3. NAMA PRODUK & KATA KUNCI DATA MASTER:
-   - Buatkan nama produk yang rapi untuk pendaftaran di Data Master kasir, contoh:
-     * "Voucher Tri 10 GB (3 Hari)"
-     * "Voucher Tri 3 GB (5 Hari)"
-     * "Voucher Indosat 10 GB (30 Hari)"
-     * "Voucher Axis Aigo 2 GB (3 Hari)"
-     * "Voucher Telkomsel 15 GB (30 Hari)"
-   - Sediakan "searchKeyword" singkat untuk pencarian kasir (contoh: "Tri 10 GB" atau "Tri 3 GB").
+3. NAMA PRODUK LENGKAP:
+   - Buatkan nama produk standar yang sangat jelas dan rapi:
+     Format: "Voucher [Provider] [Berapa Giga] GB [Berapa Hari] Hari"
+     Contoh:
+     * "Voucher Tri 10 GB 3 Hari"
+     * "Voucher Telkomsel 14 GB 30 Hari"
+     * "Voucher Axis 2 GB 3 Hari"
+     * "Voucher Indosat 10 GB 30 Hari"
+     * "Voucher XL 10 GB 30 Hari"
+     * "Voucher Smartfren 6 GB 5 Hari"
 
-Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
+4. HARGA MODAL & JUAL:
+   - Jika ada tulisan harga spidol (misal: "m18" / "j22" / "22k"), ekstrak angka modal dan jualnya. Jika tidak ada, isi 0.
+
+Kembalikan HANYA format JSON murni tanpa markdown triple backticks atau format lain:
 {
-  "provider": "Nama Provider (misal: Tri / Indosat / Telkomsel / Axis / XL / Smartfren)",
+  "provider": "Nama Provider (misal: Tri / Telkomsel / Indosat / Axis / XL / Smartfren)",
   "quota": "10 GB",
   "quotaGigabytes": 10,
   "validityDays": "3 Hari",
   "handwrittenNote": "10/3",
-  "productName": "Voucher Tri 10 GB (3 Hari)",
+  "productName": "Voucher Tri 10 GB 3 Hari",
   "searchKeyword": "Tri 10 GB",
   "suggestedCost": 0,
   "suggestedPrice": 0,
-  "detectedText": "Ringkasan tulisan cetak atau catatan spidol yang terbaca pada gambar"
+  "detectedText": "Ringkasan tulisan cetak atau catatan spidol yang terlihat pada gambar"
 }`;
 
+      // Source of truth models per gemini-api skill for fast vision processing
       const modelsToTry = [
-        'gemini-2.5-flash-lite',
-        'gemini-3.5-flash-lite',
-        'gemini-2.5-flash',
-        'gemini-flash-latest'
+        'gemini-flash-latest',
+        'gemini-3.8-flash',
+        'gemini-3.1-flash-lite',
       ];
       let lastError: any = null;
       let response: any = null;

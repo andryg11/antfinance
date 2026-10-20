@@ -14,18 +14,19 @@ import {
   PackageCheck,
   Search,
   SwitchCamera,
-  Layers
+  Layers,
+  ArrowRight
 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
-import { Product } from '../types';
-import { formatRupiah } from '../utils/formatters';
-import { useData } from '../context/DataContext';
 import { GoogleGenAI } from '@google/genai';
+import { Product } from '../types';
+import { useData } from '../context/DataContext';
+import { uploadToCloudinary } from '../utils/cloudinary';
 
 export interface ScannedVoucherData {
   name: string;
   category: string;
-  sku?: string;
+  sku: string;
   quota?: string;
   quotaGigabytes?: number;
   provider?: string;
@@ -37,14 +38,14 @@ export interface ScannedVoucherData {
   isCloudinaryUploaded?: boolean;
 }
 
-export interface ScannerModalProps {
+interface ScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   products: Product[];
   onSelectProduct?: (product: Product) => void;
   onApplySearchQuery?: (query: string) => void;
-  onScannedBarcode?: (code: string) => void;
-  onScannedVoucherInfo?: (info: ScannedVoucherData) => void;
+  onScannedBarcode?: (barcode: string) => void;
+  onScannedVoucherInfo?: (voucher: ScannedVoucherData) => void;
   title?: string;
   subtitle?: string;
   sourceContext?: 'pos' | 'master_search' | 'master_form';
@@ -64,6 +65,20 @@ interface AiScanResult {
   detectedText?: string;
 }
 
+interface CardVoucherData {
+  name: string;
+  provider: string;
+  quota: string;
+  validity: string;
+  handwrittenNote?: string;
+  cost: number;
+  price: number;
+  stock: number;
+  imageUrl: string;
+  sku: string;
+  category: string;
+}
+
 export const ScannerModal: React.FC<ScannerModalProps> = ({
   isOpen,
   onClose,
@@ -77,7 +92,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   sourceContext = 'pos',
   defaultTab,
 }) => {
-  const { settings } = useData();
+  const { settings, addProduct } = useData();
   const [activeTab, setActiveTab] = useState<'ai_vision' | 'qr_barcode'>(
     defaultTab || (sourceContext === 'master_form' ? 'qr_barcode' : 'ai_vision')
   );
@@ -100,7 +115,12 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [aiError, setAiError] = useState<string | null>(null);
   const [matchedProducts, setMatchedProducts] = useState<Product[]>([]);
 
-  // Live Camera stream states for AI Vision (direct in-app feed, NO "Gunakan foto" confirmation)
+  // Registration / Edit Card states (TIDAK LANGSUNG TERSAVE)
+  const [cardVoucherForm, setCardVoucherForm] = useState<CardVoucherData | null>(null);
+  const [isSavingMasterProduct, setIsSavingMasterProduct] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+
+  // Live Camera stream states for AI Vision
   const videoRef = useRef<HTMLVideoElement>(null);
   const liveStreamRef = useRef<MediaStream | null>(null);
   const [isLiveCameraActive, setIsLiveCameraActive] = useState(false);
@@ -115,6 +135,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fallbackCameraInputRef = useRef<HTMLInputElement>(null);
+  const cardPhotoFileInputRef = useRef<HTMLInputElement>(null);
   const qrReaderRef = useRef<Html5Qrcode | null>(null);
 
   // Audio confirmation beep
@@ -139,14 +160,14 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   };
 
-  // Helper to stop live AI camera stream cleanly
+  // Helper to stop live camera stream
   const stopLiveCamera = useCallback(() => {
     if (liveStreamRef.current) {
       liveStreamRef.current.getTracks().forEach((track) => {
         try {
           track.stop();
         } catch (e) {
-          console.warn('Track stop error:', e);
+          console.warn('Track stop warning:', e);
         }
       });
       liveStreamRef.current = null;
@@ -162,7 +183,6 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     stopLiveCamera();
     setLiveCameraError(null);
 
-    // Short delay to let DOM render video element
     setTimeout(async () => {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -172,8 +192,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         const constraints: MediaStreamConstraints = {
           video: {
             facingMode: { ideal: facing },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { min: 1280, ideal: 1920, max: 2560 },
+            height: { min: 720, ideal: 1080, max: 1440 },
           },
           audio: false,
         };
@@ -195,7 +215,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         setLiveCameraError(
           err?.name === 'NotAllowedError'
             ? 'Izin akses kamera ditolak. Berikan izin di browser Anda atau gunakan tombol unggah/file di bawah.'
-            : 'Kamera tidak dapat diakses langsung. Anda bisa menggunakan tombol buka kamera sistem atau galeri di bawah.'
+            : 'Kamera tidak dapat diakses langsung. Anda bisa menggunakan tombol kamera sistem HP atau galeri di bawah.'
         );
       }
     }, 150);
@@ -205,7 +225,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const handleToggleCamera = () => {
     const nextFacing = cameraFacing === 'environment' ? 'user' : 'environment';
     setCameraFacing(nextFacing);
-    if (!imagePreview) {
+    if (!imagePreview && !cardVoucherForm) {
       startLiveCamera(nextFacing);
     }
   };
@@ -254,19 +274,17 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           (decodedText) => {
             handleBarcodeScanned(decodedText);
           },
-          () => {}
+          () => {
+            // Scanning frame loop
+          }
         );
         setIsQrScanning(true);
       } catch (err: any) {
-        console.error('Failed to start camera for QR:', err);
+        console.error('Failed to start QR code reader:', err);
+        setQrError('Tidak dapat membuka kamera untuk barcode/QR. Pastikan izin kamera telah diberikan.');
         setIsQrScanning(false);
-        setQrError(
-          err?.name === 'NotAllowedError'
-            ? 'Izin akses kamera ditolak. Berikan izin kamera di pengaturan browser hp Anda.'
-            : 'Kamera tidak dapat diakses atau sedang digunakan oleh aplikasi lain.'
-        );
       }
-    }, 200);
+    }, 150);
   }, [stopQrScanner]);
 
   // Switch tabs & start/stop corresponding camera
@@ -280,12 +298,14 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       setMatchedProducts([]);
       setScannedCode(null);
       setBarcodeMatchedProduct(null);
+      setCardVoucherForm(null);
+      setSaveSuccessMessage(null);
       return;
     }
 
     if (activeTab === 'ai_vision') {
       stopQrScanner();
-      if (!imagePreview) {
+      if (!imagePreview && !cardVoucherForm) {
         startLiveCamera(cameraFacing);
       }
     } else if (activeTab === 'qr_barcode') {
@@ -297,10 +317,10 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       stopLiveCamera();
       stopQrScanner();
     };
-  }, [isOpen, activeTab, cameraFacing, imagePreview, startLiveCamera, stopLiveCamera, stopQrScanner, startQrScanner]);
+  }, [isOpen, activeTab, cameraFacing, imagePreview, cardVoucherForm, startLiveCamera, stopLiveCamera, stopQrScanner, startQrScanner]);
 
-  // Helper to resize/compress image before sending to AI (speeds up response to ~1s)
-  const resizeImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, quality = 0.8): Promise<string> => {
+  // Helper to resize/compress image before sending to AI
+  const resizeImage = (base64Str: string, maxWidth = 1600, maxHeight = 1600, quality = 0.9): Promise<string> => {
     return new Promise((resolve) => {
       const img = new Image();
       img.src = base64Str;
@@ -324,6 +344,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           resolve(base64Str);
           return;
         }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, width, height);
         resolve(canvas.toDataURL('image/jpeg', quality));
       };
@@ -331,29 +353,33 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     });
   };
 
-  // Instant snapshot from live camera stream - ZERO "Gunakan foto" confirmation dialog!
+  // Instant snapshot from live camera stream
   const captureLiveSnapshot = async () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
 
+    const vWidth = video.videoWidth || 1920;
+    const vHeight = video.videoHeight || 1080;
+
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = vWidth;
+    canvas.height = vHeight;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const rawBase64 = canvas.toDataURL('image/jpeg', 0.85);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(video, 0, 0, vWidth, vHeight);
+    const rawBase64 = canvas.toDataURL('image/jpeg', 0.9);
 
     // Stop live stream and freeze preview
     stopLiveCamera();
     setImagePreview(rawBase64);
 
-    // Compress for fast AI processing
-    const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.8);
+    // Keep sharp for OCR reading
+    const compressedBase64 = await resizeImage(rawBase64, 1600, 1600, 0.9);
 
-    // NOTE: Foto scan TIDAK diunggah ke Cloudinary agar Cloudinary tidak penuh!
-    // Langsung diproses dengan AI
+    // Process with AI
     await analyzeVoucherWithAi(compressedBase64, 'image/jpeg', rawBase64);
   };
 
@@ -366,15 +392,31 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     setAiError(null);
     setAiResult(null);
     setMatchedProducts([]);
+    setCardVoucherForm(null);
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       const rawBase64 = event.target?.result as string;
       setImagePreview(rawBase64);
 
-      const compressedBase64 = await resizeImage(rawBase64, 1024, 1024, 0.8);
-      // NOTE: Foto scan TIDAK diunggah ke Cloudinary!
+      const compressedBase64 = await resizeImage(rawBase64, 1600, 1600, 0.9);
       await analyzeVoucherWithAi(compressedBase64, file.type || 'image/jpeg', rawBase64);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Handle changing photo on card from gallery/file
+  const handleCardPhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const rawBase64 = event.target?.result as string;
+      if (rawBase64 && cardVoucherForm) {
+        setCardVoucherForm({ ...cardVoucherForm, imageUrl: rawBase64 });
+      }
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -420,27 +462,60 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         });
 
         const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
-        const prompt = `Anda adalah sistem AI Vision kasir & konter pulsa di Indonesia yang sangat ahli dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter.
-Tugas Anda adalah mengekstrak:
-1. OPERATOR / PROVIDER (Tri, Telkomsel, Indosat, XL, Axis, Smartfren)
-2. TULISAN TANGAN / SPIDOL (misal "10/3" artinya 10GB 3 hari)
-3. NAMA PRODUK & KATA KUNCI DATA MASTER
+        const prompt = `Anda adalah sistem AI Vision kasir & counter pulsa di Indonesia yang SANGAT TELITI, CEPAT, dan AKURAT dalam membaca fisik voucher kuota internet, kartu perdana, atau stiker/catatan label tulisan spidol voucher konter pulsa.
+Tugas Anda adalah menganalisis gambar voucher / kartu perdana / tulisan spidol ini dengan sangat cermat dan mengekstrak data berikut:
 
-Kembalikan HANYA JSON murni:
+1. OPERATOR / PROVIDER:
+   - Kenali nama provider dari logo resmi, tulisan cetak, warna kartu, atau singkatan:
+     * "Tri" / "3" / "Three"
+     * "Telkomsel" / "Tsel" / "Simpati" / "AS" / "by.U"
+     * "Indosat" / "IM3" / "Ooredoo"
+     * "XL" / "XL Axiata"
+     * "Axis" / "Aigo"
+     * "Smartfren" / "SF"
+
+2. KUOTA (GB) & MASA AKTIF (HARI):
+   - Baca tulisan kuota cetak (misal: "14 GB", "10 GB", "2 GB", "3 GB", "5 GB", "35 GB", "1.5 GB", "1.2 GB").
+   - Baca masa aktif cetak (misal: "3 Hari", "5 Hari", "7 Hari", "14 Hari", "30 Hari", "60 Hari").
+   - SANGAT PENTING - TULISAN TANGAN / SPIDOL PENJUAL KONTER:
+     Pemilik konter pulsa di Indonesia SANGAT SERING menulis ringkasan dengan SPIDOL di kartu/voucher, misalnya format angka "X/Y":
+     * "10/3" -> Kuota: 10 GB, Masa Aktif: 3 Hari
+     * "3/5" -> Kuota: 3 GB, Masa Aktif: 5 Hari
+     * "1.5/3" -> Kuota: 1.5 GB, Masa Aktif: 3 Hari
+     * "14/30" -> Kuota: 14 GB, Masa Aktif: 30 Hari
+     * "2/3" -> Kuota: 2 GB, Masa Aktif: 3 Hari
+     * "25/30" -> Kuota: 25 GB, Masa Aktif: 3 Hari
+     Jika menemukan tulisan format angka "X/Y" seperti ini, artikan X sebagai Kuota GB dan Y sebagai Masa Aktif Hari.
+
+3. NAMA PRODUK LENGKAP:
+   - Buatkan nama produk standar yang sangat jelas dan rapi:
+     Format: "Voucher [Provider] [Berapa Giga] GB [Berapa Hari] Hari"
+     Contoh:
+     * "Voucher Tri 10 GB 3 Hari"
+     * "Voucher Telkomsel 14 GB 30 Hari"
+     * "Voucher Axis 2 GB 3 Hari"
+     * "Voucher Indosat 10 GB 30 Hari"
+     * "Voucher XL 10 GB 30 Hari"
+
+Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 {
   "provider": "Nama Provider",
   "quota": "10 GB",
   "quotaGigabytes": 10,
   "validityDays": "3 Hari",
   "handwrittenNote": "10/3",
-  "productName": "Voucher Tri 10 GB (3 Hari)",
+  "productName": "Voucher Tri 10 GB 3 Hari",
   "searchKeyword": "Tri 10 GB",
   "suggestedCost": 0,
   "suggestedPrice": 0,
-  "detectedText": "teks terbaca"
+  "detectedText": "Ringkasan teks terbaca"
 }`;
 
-        const modelsToTry = ['gemini-2.5-flash-lite', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-flash-latest'];
+        const modelsToTry = [
+          'gemini-flash-latest',
+          'gemini-3.8-flash',
+          'gemini-3.1-flash-lite',
+        ];
         let clientResp: any = null;
         for (const m of modelsToTry) {
           try {
@@ -486,39 +561,45 @@ Kembalikan HANYA JSON murni:
       throw new Error(errorData.error || `Gagal menganalisis gambar. Pastikan Google Gemini API Key sudah dimasukkan di Pengaturan.`);
     } catch (err: any) {
       console.error('Scan voucher error:', err);
-      setAiError(err.message || 'Gagal memproses gambar voucher. Pastikan foto jelas dan coba lagi.');
+      setAiError(err.message || 'Gagal memproses gambar voucher. Pastikan foto fokus & jelas lalu coba lagi.');
     } finally {
       setIsAiLoading(false);
     }
   };
 
   // Process AI Detection completion:
-  // USER REQUIREMENT: "dan ketika produk nya ketemu melalui scan harusnya langsung tersimpan. jadi tidak perlu pilih lagi produknya yang mana."
+  // USER REQUIREMENT:
+  // "saat scan data master atatu tambah barang master tidak langsung tersave melainkan masih di kartu itu
+  // lalu muncul di label nama voucher yang di scan. nanti muncul namanya sama berapa giga dan harinya
+  // kemudian dibawahnya inputan modal dan inputan jual lalu bawahnya lagi ada inputan berapa jumlahnya
+  // baru nnti simpan manual untuk gambar dari gambar yang di foto itu atau dari ambil file"
   const handleAiDetectionComplete = (data: AiScanResult, rawImage: string) => {
-    // 1. If inside "Tambah Barang Baru" Form (master_form):
-    // Otomatis masukkan nama barang & data dari AI, lalu langsung tutup scanner tanpa perlu konfirmasi manual!
-    if (sourceContext === 'master_form' && onScannedVoucherInfo) {
-      const vName = data.productName || `Voucher ${data.provider} ${data.quota}${data.validityDays ? ` (${data.validityDays})` : ''}`.trim();
-      onScannedVoucherInfo({
-        name: vName,
-        category: 'Pulsa',
-        sku: `VCR-${(data.provider || 'DATA').slice(0, 4).toUpperCase()}${data.quotaGigabytes ? `${data.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
-        quota: data.quota,
-        quotaGigabytes: data.quotaGigabytes,
-        provider: data.provider,
-        validityDays: data.validityDays,
-        handwrittenNote: data.handwrittenNote,
-        suggestedCost: data.suggestedCost,
-        suggestedPrice: data.suggestedPrice,
-        imageUrl: rawImage, // Foto lokal untuk form Tambah Barang, disimpan ke Cloudinary saat produk disimpan
-        isCloudinaryUploaded: false,
-      });
-      playBeep();
-      onClose();
+    const formattedName = data.productName || 
+      `Voucher ${data.provider || ''} ${data.quota || ''} ${data.validityDays ? `${data.validityDays}` : ''}`.replace(/\s+/g, ' ').trim();
+
+    const voucherCardData: CardVoucherData = {
+      name: formattedName || 'Voucher Kuota Internet',
+      provider: data.provider || '',
+      quota: data.quota || '',
+      validity: data.validityDays || '',
+      handwrittenNote: data.handwrittenNote,
+      cost: data.suggestedCost && data.suggestedCost > 0 ? data.suggestedCost : 0,
+      price: data.suggestedPrice && data.suggestedPrice > 0 ? data.suggestedPrice : 0,
+      stock: 10,
+      imageUrl: rawImage, // Foto yang difoto itu!
+      sku: `VCR-${(data.provider || 'DATA').slice(0, 4).toUpperCase()}${data.quotaGigabytes ? `${data.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
+      category: 'Pulsa',
+    };
+
+    // If scanning from Data Master or Tambah Barang Master:
+    // TETAP DI KARTU ITU (tidak langsung tersave!)
+    if (sourceContext === 'master_search' || sourceContext === 'master_form') {
+      setCardVoucherForm(voucherCardData);
       return;
     }
 
-    // 2. Match with Data Master products
+    // In Kasir (POS):
+    // Check if product already exists in master
     const providerTerm = (data.provider || '').toLowerCase().trim();
     const quotaTerm = (data.quota || '').toLowerCase().trim();
     const gigabytes = data.quotaGigabytes;
@@ -530,12 +611,8 @@ Kembalikan HANYA JSON murni:
       const pCat = p.category.toLowerCase();
       const pSku = (p.sku || '').toLowerCase();
 
-      // Check if product specifically matches handwritten note (e.g. "10/3")
-      if (noteTerm && (pName.includes(noteTerm) || pSku.includes(noteTerm))) {
-        return true;
-      }
+      if (noteTerm && (pName.includes(noteTerm) || pSku.includes(noteTerm))) return true;
 
-      // Check provider
       const hasProvider =
         providerTerm &&
         (pName.includes(providerTerm) ||
@@ -544,7 +621,6 @@ Kembalikan HANYA JSON murni:
           (providerTerm.includes('indosat') && (pName.includes('im3') || pCat.includes('im3'))) ||
           (providerTerm.includes('telkomsel') && (pName.includes('tsel') || pName.includes('simpati'))));
 
-      // Check quota
       const rawQuotaNoSpace = quotaTerm.replace(/\s+/g, '');
       const hasQuota =
         (quotaTerm && (pName.includes(quotaTerm) || pName.includes(rawQuotaNoSpace))) ||
@@ -572,17 +648,19 @@ Kembalikan HANYA JSON murni:
 
     setMatchedProducts(matches);
 
-    // USER REQUIREMENT: Jika ketemu produknya, LANGSUNG TERSIMPAN / TERPILIH! Tidak perlu pilih lagi!
-    if (matches.length > 0 && onSelectProduct && sourceContext !== 'master_form') {
+    // In POS: If already registered in master, auto-select immediately
+    if (matches.length > 0 && onSelectProduct) {
       playBeep();
       onSelectProduct(matches[0]);
       onClose();
       return;
     }
+
+    // In POS: If NOT found in master, show card so cashier can easily register it
+    setCardVoucherForm(voucherCardData);
   };
 
   // Handle scanned QR / Barcode
-  // USER REQUIREMENT: Langsung terpilih dan tersimpan tanpa perlu pilih manual
   const handleBarcodeScanned = (code: string) => {
     if (!code) return;
     playBeep();
@@ -600,48 +678,141 @@ Kembalikan HANYA JSON murni:
 
     if (matched) {
       setBarcodeMatchedProduct(matched);
-
-      // JIKA KETEMU PRODUKNYA: LANGSUNG PILIH & SIMPAN KE TRANSAKSI / FORM
-      if (sourceContext === 'master_form' && onScannedBarcode) {
-        onScannedBarcode(matched.sku || code);
-        onClose();
-        return;
-      }
-
-      if (onSelectProduct) {
+      if (onSelectProduct && sourceContext === 'pos') {
         onSelectProduct(matched);
         onClose();
         return;
       }
-    } else {
-      setBarcodeMatchedProduct(null);
-      // Jika di form master dan barcode belum ada, langsung gunakan kodenya ke form SKU
-      if (sourceContext === 'master_form' && onScannedBarcode) {
-        onScannedBarcode(code);
-        onClose();
-        return;
+    }
+
+    // If scanning in master: open registration card with barcode prefilled
+    if (sourceContext === 'master_search' || sourceContext === 'master_form') {
+      if (matched) {
+        setCardVoucherForm({
+          name: matched.name,
+          provider: matched.provider || '',
+          quota: matched.quota || '',
+          validity: matched.validity || '',
+          cost: matched.cost,
+          price: matched.price,
+          stock: matched.stock,
+          imageUrl: matched.imageUrl || '',
+          sku: matched.sku || code,
+          category: matched.category,
+        });
+      } else {
+        setCardVoucherForm({
+          name: '',
+          provider: '',
+          quota: '',
+          validity: '',
+          cost: 0,
+          price: 0,
+          stock: 10,
+          imageUrl: '',
+          sku: code,
+          category: 'Sembako',
+        });
       }
+    }
+  };
+
+  // USER REQUIREMENT: Manual Save to Data Master
+  const handleManualSaveMasterProduct = async () => {
+    if (!cardVoucherForm) return;
+    if (!cardVoucherForm.name.trim()) {
+      alert('Nama barang / voucher tidak boleh kosong');
+      return;
+    }
+
+    setIsSavingMasterProduct(true);
+    try {
+      let finalImageUrl = cardVoucherForm.imageUrl || '';
+
+      // Upload to Cloudinary only when saving to Master (preserves Cloudinary quota)
+      if (finalImageUrl.startsWith('data:image/')) {
+        try {
+          const cRes = await uploadToCloudinary(finalImageUrl);
+          if (cRes.success && cRes.url) {
+            finalImageUrl = cRes.url;
+          }
+        } catch (uploadErr) {
+          console.warn('Cloudinary upload warning:', uploadErr);
+        }
+      }
+
+      // Save to Firestore / Data Master
+      await addProduct({
+        name: cardVoucherForm.name.trim(),
+        category: cardVoucherForm.category || 'Pulsa',
+        sku: cardVoucherForm.sku || `VCR-${Date.now().toString().slice(-4)}`,
+        price: Number(cardVoucherForm.price) || 0,
+        cost: Number(cardVoucherForm.cost) || 0,
+        stock: Number(cardVoucherForm.stock) || 0,
+        minStock: 2,
+        unit: 'Pcs',
+        isFuel: false,
+        imageUrl: finalImageUrl,
+        provider: cardVoucherForm.provider,
+        quota: cardVoucherForm.quota,
+        validity: cardVoucherForm.validity,
+      });
+
+      // If opened from Master Form, also update parent form
+      if (onScannedVoucherInfo) {
+        onScannedVoucherInfo({
+          name: cardVoucherForm.name.trim(),
+          category: cardVoucherForm.category || 'Pulsa',
+          sku: cardVoucherForm.sku,
+          imageUrl: finalImageUrl,
+          provider: cardVoucherForm.provider,
+          quota: cardVoucherForm.quota,
+          validityDays: cardVoucherForm.validity,
+          suggestedCost: cardVoucherForm.cost,
+          suggestedPrice: cardVoucherForm.price,
+          isCloudinaryUploaded: true,
+        });
+      }
+
+      playBeep();
+      setSaveSuccessMessage(`✓ Berhasil menyimpan "${cardVoucherForm.name}" ke Data Master!`);
+
+      setTimeout(() => {
+        setIsSavingMasterProduct(false);
+        setCardVoucherForm(null);
+        setImagePreview(null);
+        setAiResult(null);
+        onClose();
+      }, 1200);
+    } catch (err: any) {
+      console.error('Error saving master product:', err);
+      alert('Gagal menyimpan ke Data Master: ' + (err.message || 'Error'));
+      setIsSavingMasterProduct(false);
     }
   };
 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-150">
-      <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl overflow-hidden my-auto border border-slate-100 flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-100 overflow-hidden">
         
-        {/* Header */}
-        <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center">
-              <ScanLine className="w-4 h-4" />
+        {/* Modal Header */}
+        <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-teal-600 text-white flex items-center justify-center shadow-sm shadow-teal-600/30">
+              <ScanLine className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="font-bold text-sm text-slate-100">
-                {title || (sourceContext === 'master_form' ? 'Scan Barcode / Voucher ke Form Master' : sourceContext === 'master_search' ? 'Scan & Cari di Data Master' : 'Scan Kasir Cerdas')}
+              <h2 className="font-bold text-slate-800 text-base">
+                {title || (sourceContext === 'master_search' || sourceContext === 'master_form' 
+                  ? 'Scan & Tambah Voucher Data Master' 
+                  : 'Scan Barcode & Voucher Kuota')}
               </h2>
-              <p className="text-[11px] text-slate-400">
-                {subtitle || (sourceContext === 'master_form' ? 'Arahkan kamera ke barcode fisik atau voucher untuk otomatis mengisi form' : 'AI Vision Voucher Kuota & Barcode — Otomatis Terpilih')}
+              <p className="text-xs text-slate-500">
+                {subtitle || (sourceContext === 'master_search' || sourceContext === 'master_form'
+                  ? 'Scan kartu kuota, isi modal, jual, & stok, lalu simpan manual'
+                  : 'Scan kamera untuk kasir cepat & otomatis')}
               </p>
             </div>
           </div>
@@ -651,395 +822,554 @@ Kembalikan HANYA JSON murni:
               stopQrScanner();
               onClose();
             }}
-            className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition cursor-pointer"
+            className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Tab Selection */}
-        <div className="flex border-b border-slate-100 bg-slate-50 text-xs font-bold shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              setImagePreview(null);
-              setAiResult(null);
-              setActiveTab('ai_vision');
-            }}
-            className={`flex-1 py-3 px-3 flex items-center justify-center gap-2 transition cursor-pointer ${
-              activeTab === 'ai_vision'
-                ? 'bg-white text-teal-700 border-b-2 border-teal-600 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Sparkles className="w-4 h-4 text-amber-500" />
-            <span>AI Vision (Voucher / Kuota GB)</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('qr_barcode');
-            }}
-            className={`flex-1 py-3 px-3 flex items-center justify-center gap-2 transition cursor-pointer ${
-              activeTab === 'qr_barcode'
-                ? 'bg-white text-teal-700 border-b-2 border-teal-600 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <QrCode className="w-4 h-4 text-blue-600" />
-            <span>Barcode & QR Code</span>
-          </button>
-        </div>
+        {/* Tab Selector (Hidden if card form is active) */}
+        {!cardVoucherForm && (
+          <div className="flex border-b border-slate-100 bg-slate-50 text-xs font-bold">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('ai_vision');
+              }}
+              className={`flex-1 py-3 px-3 flex items-center justify-center gap-2 transition cursor-pointer ${
+                activeTab === 'ai_vision'
+                  ? 'bg-white text-teal-700 border-b-2 border-teal-600 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-500" />
+              <span>AI Vision (Voucher Kuota GB)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('qr_barcode');
+              }}
+              className={`flex-1 py-3 px-3 flex items-center justify-center gap-2 transition cursor-pointer ${
+                activeTab === 'qr_barcode'
+                  ? 'bg-white text-teal-700 border-b-2 border-teal-600 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <QrCode className="w-4 h-4 text-blue-600" />
+              <span>Barcode & QR Code</span>
+            </button>
+          </div>
+        )}
 
         {/* Modal Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
 
           {/* =================================================================== */}
-          {/* TAB 1: AI VISION SCANNER (LIVE CAMERA FEED - NO CONFIRMATION)       */}
+          {/* USER REQUIREMENT: KARTU DATA MASTER (TIDAK LANGSUNG TERSAVE)        */}
           {/* =================================================================== */}
-          {activeTab === 'ai_vision' && (
-            <div className="space-y-3.5">
+          {cardVoucherForm ? (
+            <div className="bg-white rounded-2xl border border-teal-100 shadow-xs p-4 sm:p-5 space-y-4 animate-in zoom-in-95">
               
-              {/* Petunjuk Cepat */}
-              <div className="bg-teal-50/90 border border-teal-200/70 rounded-2xl p-3 flex items-start gap-2.5">
-                <div className="w-6 h-6 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 mt-0.5">
-                  <Wifi className="w-3.5 h-3.5" />
+              {/* Header Kartu */}
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center font-bold">
+                    <Sparkles className="w-4 h-4 text-teal-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Kartu Tambah Voucher Master</h3>
+                    <p className="text-[11px] text-slate-500">Periksa nama, input modal, jual & jumlah, lalu simpan manual</p>
+                  </div>
                 </div>
-                <div className="text-xs text-teal-900 leading-snug">
-                  <span className="font-bold">Scan Langsung (Tanpa Konfirmasi):</span> Arahkan kamera ke voucher / kartu kuota, lalu tekan tombol <b>Jepret & Scan</b>. AI akan mendeteksi kuota (GB) & otomatis memilih produk jika sudah ada.
-                </div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  Hasil AI Terbaca
+                </span>
               </div>
 
-              {/* LIVE CAMERA FEED & SHUTTER (OR PREVIEW IF CAPTURED) */}
-              {!imagePreview ? (
-                <div className="space-y-3">
-                  <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-4/3 max-w-md mx-auto flex items-center justify-center shadow-md border border-slate-800">
-                    
-                    {/* HTML5 Live Video Stream */}
-                    <video
-                      ref={videoRef}
-                      playsInline
-                      autoPlay
-                      muted
-                      className="w-full h-full object-cover"
-                    />
-
-                    {/* Viewfinder Overlays & Guidelines */}
-                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                      <div className="w-4/5 h-3/5 border-2 border-teal-400/80 rounded-2xl relative shadow-[0_0_15px_rgba(20,184,166,0.3)]">
-                        <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
-                        <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
-                        <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
-                        <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
-                        
-                        <div className="absolute inset-x-0 bottom-2 text-center">
-                          <span className="px-2 py-0.5 bg-black/60 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
-                            Posisikan Voucher / Kuota di Kotak
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Switch camera button (Front/Rear) */}
-                    <button
-                      type="button"
-                      onClick={handleToggleCamera}
-                      className="absolute top-3 right-3 p-2 bg-black/60 hover:bg-black/80 text-white rounded-full backdrop-blur-xs border border-white/20 transition cursor-pointer"
-                      title="Balik Kamera Depan / Belakang"
-                    >
-                      <SwitchCamera className="w-4 h-4" />
-                    </button>
-
-                    {/* Camera error message fallback */}
-                    {liveCameraError && (
-                      <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center text-white space-y-2">
-                        <AlertCircle className="w-8 h-8 text-amber-400" />
-                        <p className="text-xs text-slate-200 max-w-xs">{liveCameraError}</p>
-                        <button
-                          type="button"
-                          onClick={() => fallbackCameraInputRef.current?.click()}
-                          className="px-3.5 py-1.5 bg-teal-600 text-white rounded-xl text-xs font-bold shadow-xs hover:bg-teal-700 transition cursor-pointer"
-                        >
-                          Buka Kamera Sistem HP
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* SHUTTER BUTTON: AMBIL FOTO LANGSUNG (TANPA KONFIRMASI) */}
-                  <div className="flex items-center justify-center gap-3 pt-1">
-                    <button
-                      type="button"
-                      onClick={captureLiveSnapshot}
-                      className="flex-1 py-3.5 px-4 bg-teal-600 hover:bg-teal-700 active:scale-98 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2.5 shadow-md shadow-teal-700/20 transition cursor-pointer"
-                    >
-                      <Camera className="w-5 h-5" />
-                      <span>📸 Jepret & Scan Sekarang</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="p-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl transition cursor-pointer"
-                      title="Pilih dari Galeri / File"
-                    >
-                      <Upload className="w-5 h-5" />
-                    </button>
-                  </div>
+              {/* 1. Pratinjau Foto: Dari Foto yang Di-scan ATAU Ambil File Galeri */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700">Foto Barang / Voucher</label>
+                  <span className="text-[10px] text-slate-400">Dari foto scan atau ambil file</span>
                 </div>
-              ) : (
-                /* Captured Image View with Scanning State */
-                <div className="space-y-3">
-                  <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-4/3 max-w-md mx-auto flex items-center justify-center border border-slate-200 shadow-inner">
-                    <img
-                      src={imagePreview}
-                      alt="Pratinjau Voucher"
-                      className="w-full h-full object-contain"
-                    />
 
-                    {/* AI Scanning animation overlay */}
-                    {isAiLoading && (
-                      <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center text-white">
-                        <div className="relative w-14 h-14 mb-3">
-                          <Loader2 className="w-14 h-14 animate-spin text-teal-400" />
-                          <Sparkles className="w-6 h-6 text-amber-300 absolute inset-0 m-auto animate-pulse" />
-                        </div>
-                        <p className="font-bold text-sm">Menganalisis Voucher dengan AI...</p>
-                        <p className="text-xs text-slate-300 mt-1 max-w-xs">
-                          Membaca kuota (GB), operator, dan tulisan spidol secara instan...
-                        </p>
-                      </div>
+                <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                  <div className="relative w-28 h-28 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-300 shadow-inner flex items-center justify-center">
+                    {cardVoucherForm.imageUrl ? (
+                      <img
+                        src={cardVoucherForm.imageUrl}
+                        alt="Foto Voucher"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <Camera className="w-8 h-8 text-slate-400" />
                     )}
                   </div>
 
-                  {/* Button Foto Ulang */}
-                  {!isAiLoading && (
-                    <div className="flex justify-end">
+                  <div className="flex-1 space-y-2 w-full text-left">
+                    <p className="text-[11px] text-slate-600 leading-snug">
+                      Foto di samping adalah foto voucher yang baru saja discan. Anda bisa menggunakan foto ini atau ganti dengan mengambil file dari galeri.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => cardPhotoFileInputRef.current?.click()}
+                        className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Ganti / Ambil File Galeri</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => {
+                          setCardVoucherForm(null);
                           setImagePreview(null);
                           setAiResult(null);
-                          setAiError(null);
-                          setMatchedProducts([]);
                           startLiveCamera(cameraFacing);
                         }}
-                        className="text-xs font-bold text-teal-700 hover:text-teal-900 flex items-center gap-1.5 py-1 px-2.5 rounded-lg hover:bg-teal-50 transition cursor-pointer"
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
                       >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        <span>Foto Ulang Kamera</span>
+                        <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Foto Ulang</span>
                       </button>
                     </div>
+                  </div>
+                </div>
+
+                <input
+                  type="file"
+                  ref={cardPhotoFileInputRef}
+                  accept="image/*"
+                  onChange={handleCardPhotoChange}
+                  className="hidden"
+                />
+              </div>
+
+              {/* 2. Label Nama Voucher yang di-scan: Nama, Berapa Giga, dan Harinya */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700">
+                    Label Nama Voucher yang Di-scan *
+                  </label>
+                  <span className="text-[10px] text-teal-700 font-semibold">
+                    Nama + Berapa Giga + Harinya
+                  </span>
+                </div>
+
+                {/* Badge ringkasan: Provider, Giga, Hari, Tulisan Spidol */}
+                <div className="flex flex-wrap gap-1.5 p-2 bg-teal-50/80 rounded-xl border border-teal-100 text-xs">
+                  {cardVoucherForm.provider && (
+                    <span className="px-2 py-0.5 bg-white text-teal-800 font-bold rounded-md border border-teal-200">
+                      📶 {cardVoucherForm.provider}
+                    </span>
+                  )}
+                  {cardVoucherForm.quota && (
+                    <span className="px-2 py-0.5 bg-white text-teal-900 font-extrabold rounded-md border border-teal-200">
+                      ⚡ {cardVoucherForm.quota}
+                    </span>
+                  )}
+                  {cardVoucherForm.validity && (
+                    <span className="px-2 py-0.5 bg-white text-amber-800 font-bold rounded-md border border-amber-200">
+                      ⏳ {cardVoucherForm.validity}
+                    </span>
+                  )}
+                  {cardVoucherForm.handwrittenNote && (
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-900 font-bold rounded-md">
+                      ✏️ Spidol: {cardVoucherForm.handwrittenNote}
+                    </span>
                   )}
                 </div>
-              )}
 
-              {/* Hidden file inputs for gallery and fallback camera */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileCapture}
-                className="hidden"
-              />
-              <input
-                ref={fallbackCameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleFileCapture}
-                className="hidden"
-              />
+                {/* Input teks Nama Voucher */}
+                <input
+                  type="text"
+                  required
+                  value={cardVoucherForm.name}
+                  onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, name: e.target.value })}
+                  placeholder="Contoh: Voucher Tri 10 GB 3 Hari"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold text-slate-900 text-sm"
+                />
+              </div>
 
-              {/* Error Box */}
-              {aiError && (
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-                  <div className="space-y-1">
-                    <div className="font-bold">Gagal Menganalisis Gambar</div>
-                    <div className="text-[11px] leading-relaxed">{aiError}</div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setImagePreview(null);
-                        setAiResult(null);
-                        setAiError(null);
-                        startLiveCamera(cameraFacing);
-                      }}
-                      className="text-teal-700 font-bold underline text-xs cursor-pointer"
-                    >
-                      Coba Ambil Foto Lagi
-                    </button>
+              {/* 3. Inputan Modal (Harga Beli) & Inputan Jual (Harga Jual) */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Modal (Harga Beli) *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">Rp</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="500"
+                      required
+                      value={cardVoucherForm.cost || ''}
+                      onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, cost: Number(e.target.value) || 0 })}
+                      placeholder="0"
+                      className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold text-slate-800 text-sm"
+                    />
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Harga Jual *
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-2.5 text-xs text-teal-600 font-bold">Rp</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="500"
+                      required
+                      value={cardVoucherForm.price || ''}
+                      onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, price: Number(e.target.value) || 0 })}
+                      placeholder="0"
+                      className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-black text-teal-800 text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Tampilan Estimasi Keuntungan */}
+              <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs">
+                <span className="text-slate-600 font-medium">Estimasi Keuntungan per Pcs:</span>
+                <span className="font-bold text-emerald-700">
+                  +Rp {Math.max(0, cardVoucherForm.price - cardVoucherForm.cost).toLocaleString('id-ID')}
+                </span>
+              </div>
+
+              {/* 4. Inputan Berapa Jumlahnya (Stok Pcs) */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Berapa Jumlahnya (Stok Pcs) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  required
+                  value={cardVoucherForm.stock || ''}
+                  onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, stock: Number(e.target.value) || 1 })}
+                  placeholder="10"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold text-slate-900 text-sm"
+                />
+              </div>
+
+              {/* Feedback Notifikasi Simpan */}
+              {saveSuccessMessage && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{saveSuccessMessage}</span>
                 </div>
               )}
 
-              {/* Hasil AI Scan jika TIDAK langsung otomatis keluar (misal produk belum ada di master) */}
-              {aiResult && !isAiLoading && matchedProducts.length === 0 && (
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3 animate-in zoom-in-95">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                      Hasil Deteksi AI
-                    </span>
-                    <span className="text-[11px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
-                      Belum di Data Master
-                    </span>
+              {/* 5. Tombol Simpan Manual */}
+              <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                <button
+                  type="button"
+                  disabled={isSavingMasterProduct}
+                  onClick={handleManualSaveMasterProduct}
+                  className="flex-1 py-3 px-4 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+                >
+                  {isSavingMasterProduct ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Menyimpan ke Data Master...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>💾 Simpan Manual ke Data Master</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCardVoucherForm(null);
+                    setImagePreview(null);
+                    setAiResult(null);
+                    startLiveCamera(cameraFacing);
+                  }}
+                  className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold text-xs transition cursor-pointer"
+                >
+                  Batal / Scan Ulang
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Standard Viewfinder Mode */
+            <>
+              {/* TAB 1: AI VISION SCANNER */}
+              {activeTab === 'ai_vision' && (
+                <div className="space-y-3.5">
+                  
+                  {/* Petunjuk Cepat */}
+                  <div className="bg-teal-50/90 border border-teal-200/70 rounded-2xl p-3 flex items-start gap-2.5">
+                    <div className="w-6 h-6 rounded-lg bg-teal-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                      <Wifi className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="text-xs text-teal-900 leading-snug">
+                      <span className="font-bold">Scan Voucher Kuota GB:</span> Arahkan kamera ke voucher / kartu perdana / tulisan spidol. Tekan tombol <b>Jepret & Scan</b> untuk mendeteksi nama, kuota GB, dan masa aktif secara otomatis.
+                    </div>
                   </div>
 
-                  <div className="bg-white p-3.5 rounded-xl border border-teal-100 shadow-xs space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-[10px] text-slate-400 font-semibold uppercase">Total Kuota Terbaca</div>
-                        <div className="text-xl font-black text-teal-700 tracking-tight">
-                          {aiResult.quota || 'Tidak terbaca'}
+                  {/* LIVE CAMERA FEED & SHUTTER (OR PREVIEW IF CAPTURED) */}
+                  {!imagePreview ? (
+                    <div className="space-y-3">
+                      <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-4/3 max-w-md mx-auto flex items-center justify-center shadow-md border border-slate-800">
+                        
+                        {/* HTML5 Live Video Stream */}
+                        <video
+                          ref={videoRef}
+                          playsInline
+                          autoPlay
+                          muted
+                          className="w-full h-full object-cover"
+                        />
+
+                        {/* Viewfinder Overlays & Guidelines */}
+                        <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                          <div className="w-4/5 h-3/5 border-2 border-teal-400/80 rounded-2xl relative shadow-[0_0_15px_rgba(20,184,166,0.3)]">
+                            <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
+                            <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
+                            <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
+                            <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
+                            
+                            <div className="absolute inset-x-0 bottom-2 text-center">
+                              <span className="px-2 py-0.5 bg-black/60 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
+                                Posisikan Voucher di Kotak
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-600 font-bold mt-0.5">
-                          {aiResult.provider} {aiResult.productName ? `• ${aiResult.productName}` : ''}
-                        </div>
+
+                        {/* Switch camera button (Front/Rear) */}
+                        <button
+                          type="button"
+                          onClick={handleToggleCamera}
+                          className="absolute top-3 right-3 p-2 bg-black/60 hover:bg-black/80 text-white rounded-full backdrop-blur-xs border border-white/20 transition cursor-pointer"
+                          title="Balik Kamera Depan / Belakang"
+                        >
+                          <SwitchCamera className="w-4 h-4" />
+                        </button>
+
+                        {/* Camera error message fallback */}
+                        {liveCameraError && (
+                          <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center text-white space-y-2">
+                            <AlertCircle className="w-8 h-8 text-amber-400" />
+                            <p className="text-xs text-slate-200 max-w-xs">{liveCameraError}</p>
+                            <button
+                              type="button"
+                              onClick={() => fallbackCameraInputRef.current?.click()}
+                              className="px-3.5 py-1.5 bg-teal-600 text-white rounded-xl text-xs font-bold shadow-xs hover:bg-teal-700 transition cursor-pointer"
+                            >
+                              Buka Kamera HP
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      {aiResult.validityDays && (
-                        <span className="px-2.5 py-1 bg-amber-50 text-amber-800 text-[11px] font-bold rounded-lg border border-amber-200">
-                          Aktif {aiResult.validityDays}
-                        </span>
+                      {/* SHUTTER BUTTONS */}
+                      <div className="flex flex-col sm:flex-row items-center gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={captureLiveSnapshot}
+                          className="w-full flex-1 py-3 px-4 bg-teal-600 hover:bg-teal-700 active:scale-98 text-white rounded-2xl font-bold text-sm flex items-center justify-center gap-2 shadow-md shadow-teal-700/20 transition cursor-pointer"
+                        >
+                          <Camera className="w-4 h-4" />
+                          <span>📸 Jepret & Scan Sekarang</span>
+                        </button>
+
+                        <div className="flex gap-2 w-full sm:w-auto">
+                          <button
+                            type="button"
+                            onClick={() => fallbackCameraInputRef.current?.click()}
+                            className="flex-1 sm:flex-none px-3.5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                            title="Ambil Foto Tajam dengan Kamera HP"
+                          >
+                            <Camera className="w-4 h-4 text-teal-600" />
+                            <span>Kamera HP (Tajam)</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="px-3.5 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-2xl transition cursor-pointer"
+                            title="Pilih dari Galeri / File"
+                          >
+                            <Upload className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Captured Image View with Scanning State */
+                    <div className="space-y-3">
+                      <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-4/3 max-w-md mx-auto flex items-center justify-center border border-slate-200 shadow-inner">
+                        <img
+                          src={imagePreview}
+                          alt="Pratinjau Voucher"
+                          className="w-full h-full object-contain"
+                        />
+
+                        {/* AI Scanning animation overlay */}
+                        {isAiLoading && (
+                          <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center text-white">
+                            <div className="relative w-14 h-14 mb-3">
+                              <Loader2 className="w-14 h-14 animate-spin text-teal-400" />
+                              <Sparkles className="w-6 h-6 text-amber-300 absolute inset-0 m-auto animate-pulse" />
+                            </div>
+                            <p className="font-bold text-sm">Menganalisis Voucher dengan AI...</p>
+                            <p className="text-xs text-slate-300 mt-1 max-w-xs">
+                              Membaca nama voucher, kuota GB, masa aktif & tulisan spidol...
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Button Foto Ulang */}
+                      {!isAiLoading && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setImagePreview(null);
+                              setAiResult(null);
+                              setAiError(null);
+                              setMatchedProducts([]);
+                              startLiveCamera(cameraFacing);
+                            }}
+                            className="text-xs font-bold text-teal-700 hover:text-teal-900 flex items-center gap-1.5 py-1 px-2.5 rounded-lg hover:bg-teal-50 transition cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Foto Ulang Kamera</span>
+                          </button>
+                        </div>
                       )}
                     </div>
+                  )}
 
-                    {aiResult.handwrittenNote && (
-                      <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between text-xs">
-                        <span className="font-bold text-amber-900">✏️ Spidol: {aiResult.handwrittenNote}</span>
-                        <span className="text-[10px] text-amber-700">{aiResult.quota}</span>
+                  {/* Hidden file inputs for gallery and fallback camera */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileCapture}
+                    className="hidden"
+                  />
+                  <input
+                    ref={fallbackCameraInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFileCapture}
+                    className="hidden"
+                  />
+
+                  {/* Error Box */}
+                  {aiError && (
+                    <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-700 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+                      <div className="space-y-1">
+                        <div className="font-bold">Gagal Menganalisis Gambar</div>
+                        <div className="text-[11px] leading-relaxed">{aiError}</div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImagePreview(null);
+                            setAiResult(null);
+                            setAiError(null);
+                            startLiveCamera(cameraFacing);
+                          }}
+                          className="text-teal-700 font-bold underline text-xs cursor-pointer"
+                        >
+                          Coba Ambil Foto Lagi
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* TAB 2: QR CODE & BARCODE SCANNER */}
+              {activeTab === 'qr_barcode' && (
+                <div className="space-y-4">
+                  <div className="bg-blue-50/80 border border-blue-200/60 rounded-2xl p-3 flex items-start gap-3">
+                    <div className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 mt-0.5">
+                      <QrCode className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="text-xs text-blue-900 leading-relaxed">
+                      <span className="font-bold">Scan Barcode / QR Code:</span> Arahkan kamera ke barcode produk fisik atau kemasan.
+                    </div>
+                  </div>
+
+                  {/* Viewfinder container */}
+                  <div className="relative rounded-2xl overflow-hidden bg-black aspect-square max-w-[300px] mx-auto flex items-center justify-center shadow-md border border-slate-800">
+                    <div id="qr-reader-container" className="w-full h-full" />
+
+                    {isQrScanning && (
+                      <div className="absolute inset-0 pointer-events-none flex flex-col justify-center items-center">
+                        <div className="w-44 h-44 border-2 border-teal-400/80 rounded-2xl relative">
+                          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-teal-400" />
+                          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-teal-400" />
+                          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-2 border-b-2 border-teal-400" />
+                          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-2 border-b-2 border-teal-400" />
+                          <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-bounce mt-22" />
+                        </div>
                       </div>
                     )}
                   </div>
 
-                  {/* Actions for unmatched product */}
-                  <div className="space-y-2 pt-1">
-                    {onScannedVoucherInfo && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const vName = aiResult.productName || `Voucher ${aiResult.provider} ${aiResult.quota}${aiResult.validityDays ? ` (${aiResult.validityDays})` : ''}`.trim();
-                          onScannedVoucherInfo({
-                            name: vName,
-                            category: 'Pulsa',
-                            sku: `VCR-${(aiResult.provider || 'DATA').slice(0, 4).toUpperCase()}${aiResult.quotaGigabytes ? `${aiResult.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
-                            quota: aiResult.quota,
-                            quotaGigabytes: aiResult.quotaGigabytes,
-                            provider: aiResult.provider,
-                            validityDays: aiResult.validityDays,
-                            handwrittenNote: aiResult.handwrittenNote,
-                            suggestedCost: aiResult.suggestedCost,
-                            suggestedPrice: aiResult.suggestedPrice,
-                            imageUrl: imagePreview || undefined,
-                            isCloudinaryUploaded: false,
-                          });
-                          onClose();
-                        }}
-                        className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
-                      >
-                        <Sparkles className="w-4 h-4 text-amber-300" />
-                        <span>+ Daftarkan Sebagai Produk Baru di Data Master</span>
-                      </button>
-                    )}
-
-                    {onApplySearchQuery && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const term = aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`.trim();
-                          onApplySearchQuery(term);
-                          onClose();
-                        }}
-                        className="w-full py-2 px-3 bg-teal-50 hover:bg-teal-100 text-teal-800 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition border border-teal-200 cursor-pointer"
-                      >
-                        <Search className="w-3.5 h-3.5" />
-                        <span>Cari "{aiResult.searchKeyword || `${aiResult.provider} ${aiResult.quota}`}" di Kasir</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* =================================================================== */}
-          {/* TAB 2: QR CODE & BARCODE SCANNER (AUTO SELECT PRODUCT)              */}
-          {/* =================================================================== */}
-          {activeTab === 'qr_barcode' && (
-            <div className="space-y-4">
-              <div className="bg-blue-50/80 border border-blue-200/60 rounded-2xl p-3 flex items-start gap-3">
-                <div className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 mt-0.5">
-                  <QrCode className="w-3.5 h-3.5" />
-                </div>
-                <div className="text-xs text-blue-900 leading-relaxed">
-                  <span className="font-bold">Scan Barcode / QR Code:</span> Arahkan kamera ke barcode produk. Jika produk sudah terdaftar, <span className="font-bold underline">langsung otomatis tersimpan/terpilih</span> tanpa perlu klik lagi!
-                </div>
-              </div>
-
-              {/* Viewfinder container */}
-              <div className="relative rounded-2xl overflow-hidden bg-black aspect-square max-w-[300px] mx-auto flex items-center justify-center shadow-md border border-slate-800">
-                <div id="qr-reader-container" className="w-full h-full" />
-
-                {isQrScanning && (
-                  <div className="absolute inset-0 pointer-events-none flex flex-col justify-center items-center">
-                    <div className="w-44 h-44 border-2 border-teal-400/80 rounded-2xl relative">
-                      <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-teal-400" />
-                      <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-teal-400" />
-                      <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-2 border-b-2 border-teal-400" />
-                      <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-2 border-b-2 border-teal-400" />
-                      <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-bounce mt-22" />
+                  {/* QR scanner error */}
+                  {qrError && (
+                    <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                      <div>
+                        <div className="font-bold">Kendala Kamera</div>
+                        <div className="mt-0.5">{qrError}</div>
+                        <button
+                          type="button"
+                          onClick={startQrScanner}
+                          className="mt-2 text-xs font-bold text-teal-700 underline cursor-pointer"
+                        >
+                          Buka Kamera Lagi
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
+                  )}
 
-              {/* QR scanner error */}
-              {qrError && (
-                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
-                  <div>
-                    <div className="font-bold">Kendala Kamera</div>
-                    <div className="mt-0.5">{qrError}</div>
-                    <button
-                      type="button"
-                      onClick={startQrScanner}
-                      className="mt-2 text-xs font-bold text-teal-700 underline cursor-pointer"
-                    >
-                      Buka Kamera Lagi
-                    </button>
-                  </div>
-                </div>
-              )}
+                  {/* Scanned code not found in master */}
+                  {scannedCode && !barcodeMatchedProduct && (
+                    <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-2">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+                        <div>
+                          Kode Barcode <b>"{scannedCode}"</b> belum terdaftar di Data Master.
+                        </div>
+                      </div>
 
-              {/* Scanned code not found in master */}
-              {scannedCode && !barcodeMatchedProduct && (
-                <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-2">
-                  <div className="flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-                    <div>
-                      Kode Barcode <b>"{scannedCode}"</b> belum terdaftar di Data Master.
+                      {onScannedBarcode && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onScannedBarcode(scannedCode);
+                            onClose();
+                          }}
+                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
+                        >
+                          <PackageCheck className="w-3.5 h-3.5" />
+                          <span>Daftarkan Kode Barcode Ini ke Data Master</span>
+                        </button>
+                      )}
                     </div>
-                  </div>
-
-                  {onScannedBarcode && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onScannedBarcode(scannedCode);
-                        onClose();
-                      }}
-                      className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
-                    >
-                      <PackageCheck className="w-3.5 h-3.5" />
-                      <span>Daftarkan Kode Barcode Ini ke Data Master</span>
-                    </button>
                   )}
                 </div>
               )}
-            </div>
+            </>
           )}
 
         </div>
