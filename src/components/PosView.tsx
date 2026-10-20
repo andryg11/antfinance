@@ -65,6 +65,7 @@ export const PosView: React.FC = () => {
   // Feedback & Receipt Modal
   const [completedTx, setCompletedTx] = useState<Transaction | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [scanFeedback, setScanFeedback] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Calculate dynamic admin fee from the SELECTED PRODUCT's own admin ranges (from Data Master)
@@ -281,6 +282,22 @@ export const PosView: React.FC = () => {
 
       <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden p-5 sm:p-7 space-y-6">
         
+        {/* Banner feedback jika produk otomatis terpilih dari hasil scan */}
+        {scanFeedback && (
+          <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-2xl text-xs flex items-center justify-between shadow-xs animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-bold">{scanFeedback}</span>
+            </div>
+            <button
+              onClick={() => setScanFeedback(null)}
+              className="text-slate-400 hover:text-slate-600 p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* ============================================================ */}
         {/* LANGKAH 1: CARI DI TRANSAKSI (MUNCUL LIST, BUKAN KOTAK-KOTAK) */}
         {/* ============================================================ */}
@@ -873,6 +890,8 @@ export const PosView: React.FC = () => {
         products={products}
         onSelectProduct={(product) => {
           handleItemClick(product);
+          setScanFeedback(`✓ Produk "${product.name}" (${formatRupiah(product.price)}) otomatis terpilih dari hasil scan!`);
+          setTimeout(() => setScanFeedback(null), 5000);
         }}
         onApplySearchQuery={(query) => {
           setSearchQuery(query);

@@ -21,7 +21,8 @@ import {
   Sparkles,
   Cloud,
   ImageIcon,
-  Loader2
+  Loader2,
+  Upload
 } from 'lucide-react';
 import { uploadToCloudinary } from '../utils/cloudinary';
 import { 
@@ -122,21 +123,22 @@ export const ProductsView: React.FC = () => {
         provider: info.provider || prev.provider,
         quota: info.quota || prev.quota,
         validity: info.validityDays || prev.validity,
-        price: info.suggestedPrice && info.suggestedPrice > 0 ? info.suggestedPrice : prev.price,
-        cost: info.suggestedCost && info.suggestedCost > 0 ? info.suggestedCost : prev.cost,
+        price: info.suggestedPrice && info.suggestedPrice > 0 ? info.suggestedPrice : (prev.price || 0),
+        cost: info.suggestedCost && info.suggestedCost > 0 ? info.suggestedCost : (prev.cost || 0),
       }));
-      setScannerFeedback(`Informasi voucher "${info.name}" (${info.quota || ''}) dimasukkan ke form.`);
-      setTimeout(() => setScannerFeedback(null), 4500);
+      setIsAddModalOpen(true);
+      setScannerFeedback(`✨ Nama barang "${info.name}" otomatis dari AI! Silakan masukkan Modal, Harga Jual, dan Jumlah Pcs.`);
+      setTimeout(() => setScannerFeedback(null), 5000);
     } else {
       // Open add product modal pre-filled with voucher data!
       setBarangForm({
         name: info.name,
         category: 'Pulsa',
         sku: info.sku || `VCR-${Date.now().toString().slice(-4)}`,
-        price: info.suggestedPrice && info.suggestedPrice > 0 ? info.suggestedPrice : 25000,
-        cost: info.suggestedCost && info.suggestedCost > 0 ? info.suggestedCost : 22000,
-        stock: 50,
-        minStock: 5,
+        price: info.suggestedPrice && info.suggestedPrice > 0 ? info.suggestedPrice : 0,
+        cost: info.suggestedCost && info.suggestedCost > 0 ? info.suggestedCost : 0,
+        stock: 10,
+        minStock: 2,
         unit: 'Pcs',
         isFuel: false,
         imageUrl: info.imageUrl || '',
@@ -147,8 +149,8 @@ export const ProductsView: React.FC = () => {
       setModalType('barang');
       setEditingProduct(null);
       setIsAddModalOpen(true);
-      setScannerFeedback(`Membuka form pendaftaran voucher baru "${info.name}".`);
-      setTimeout(() => setScannerFeedback(null), 4500);
+      setScannerFeedback(`✨ Nama barang "${info.name}" otomatis dari AI! Silakan masukkan Modal, Harga Jual, dan Jumlah Pcs.`);
+      setTimeout(() => setScannerFeedback(null), 5000);
     }
   };
 
@@ -299,6 +301,24 @@ export const ProductsView: React.FC = () => {
     e.preventDefault();
     if (!barangForm.name.trim()) return;
 
+    let finalImageUrl = barangForm.imageUrl || '';
+
+    // USER REQUIREMENT: Foto yang didaftarkan di Tambah Barang Baru dimasukkan ke Cloudinary
+    // Jika gambar masih berupa data base64 lokal (hasil scan kamera atau foto langsung), upload ke Cloudinary sekarang
+    if (finalImageUrl.startsWith('data:image/')) {
+      setIsUploadingPhoto(true);
+      try {
+        const uploadRes = await uploadToCloudinary(finalImageUrl);
+        if (uploadRes.success && uploadRes.url) {
+          finalImageUrl = uploadRes.url;
+        }
+      } catch (err) {
+        console.warn('Gagal upload ke Cloudinary, menyimpan secara lokal:', err);
+      } finally {
+        setIsUploadingPhoto(false);
+      }
+    }
+
     if (editingProduct) {
       await updateProduct(editingProduct.id, {
         name: barangForm.name.trim(),
@@ -310,7 +330,7 @@ export const ProductsView: React.FC = () => {
         minStock: Number(barangForm.minStock),
         unit: barangForm.unit.trim() || 'Pcs',
         isFuel: barangForm.category === 'BBM' || barangForm.isFuel,
-        imageUrl: barangForm.imageUrl || '',
+        imageUrl: finalImageUrl,
         provider: barangForm.provider || '',
         quota: barangForm.quota || '',
         validity: barangForm.validity || '',
@@ -327,7 +347,7 @@ export const ProductsView: React.FC = () => {
         minStock: Number(barangForm.minStock),
         unit: barangForm.unit.trim() || 'Pcs',
         isFuel: barangForm.category === 'BBM' || barangForm.isFuel,
-        imageUrl: barangForm.imageUrl || '',
+        imageUrl: finalImageUrl,
         provider: barangForm.provider || '',
         quota: barangForm.quota || '',
         validity: barangForm.validity || '',
@@ -1152,6 +1172,17 @@ export const ProductsView: React.FC = () => {
             {/* FORM 1: BARANG & PULSA */}
             {modalType === 'barang' && (
               <form onSubmit={handleSaveBarang} className="p-5 space-y-3.5 text-xs">
+                {/* Panduan Tambah Barang (AI & Cloudinary) */}
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-2xl text-teal-900 space-y-1">
+                  <p className="font-bold flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-teal-600 shrink-0" />
+                    <span>Mode AI & Cloudinary atau Manual:</span>
+                  </p>
+                  <p className="text-[11px] text-teal-800 leading-relaxed">
+                    <b>Otomatis AI:</b> Upload foto voucher/produk untuk mendeteksi nama & kuota otomatis oleh AI (foto disimpan ke Cloudinary), lalu Anda cukup input <b>Modal</b>, <b>Harga Jual</b>, dan <b>Jumlah Pcs</b>. Atau isi manual di bawah ini.
+                  </p>
+                </div>
+
                 {/* UPLOAD FOTO KE CLOUDINARY & BACA SPIDOL */}
                 <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-2xl space-y-2">
                   <div className="flex items-center justify-between">
@@ -1187,32 +1218,59 @@ export const ProductsView: React.FC = () => {
                         <p className="text-[10px] text-slate-400 mt-0.5 truncate font-mono">
                           {barangForm.imageUrl}
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => modalPhotoInputRef.current?.click()}
-                          className="mt-1 text-[11px] text-teal-700 hover:text-teal-900 font-bold hover:underline cursor-pointer"
-                        >
-                          Ganti Foto Voucher
-                        </button>
+                        <div className="flex items-center gap-2 mt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setScannerContext('master_form');
+                              setIsScannerOpen(true);
+                            }}
+                            className="text-[11px] text-teal-700 hover:text-teal-900 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                          >
+                            <Camera className="w-3.5 h-3.5 text-teal-600" />
+                            <span>Scan Ulang Kamera AI</span>
+                          </button>
+                          <span className="text-slate-300">•</span>
+                          <button
+                            type="button"
+                            onClick={() => modalPhotoInputRef.current?.click()}
+                            className="text-[11px] text-slate-600 hover:text-slate-800 font-medium hover:underline cursor-pointer"
+                          >
+                            Ganti dari Galeri
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerContext('master_form');
+                          setIsScannerOpen(true);
+                        }}
+                        className="py-2.5 px-3 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer text-xs"
+                        title="Scan kamera langsung untuk mendeteksi nama & kuota voucher secara otomatis"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Scan Kamera AI</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => modalPhotoInputRef.current?.click()}
                         disabled={isUploadingPhoto}
-                        className="flex-1 py-2.5 px-3 bg-white border border-dashed border-teal-300 hover:border-teal-500 rounded-xl text-teal-800 font-bold flex items-center justify-center gap-2 transition hover:bg-teal-50/40 cursor-pointer text-xs"
+                        className="py-2.5 px-3 bg-white border border-slate-200 hover:bg-slate-100 rounded-xl text-slate-700 font-bold flex items-center justify-center gap-1.5 transition cursor-pointer text-xs"
                       >
                         {isUploadingPhoto ? (
                           <>
-                            <Loader2 className="w-4 h-4 animate-spin text-teal-600" />
-                            <span>Mengunggah ke Cloudinary & Deteksi Spidol...</span>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-teal-600" />
+                            <span>Memproses...</span>
                           </>
                         ) : (
                           <>
-                            <Camera className="w-4 h-4 text-teal-600" />
-                            <span>Ambil Foto / Upload Voucher (Deteksi Tulisan Spidol)</span>
+                            <Upload className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Upload Galeri</span>
                           </>
                         )}
                       </button>
@@ -1376,14 +1434,22 @@ export const ProductsView: React.FC = () => {
                 <div className="pt-2 flex gap-2">
                   <button
                     type="submit"
-                    className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl transition"
+                    disabled={isUploadingPhoto}
+                    className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-2"
                   >
-                    Simpan Barang / Pulsa
+                    {isUploadingPhoto ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Mengunggah Foto ke Cloudinary & Menyimpan...</span>
+                      </>
+                    ) : (
+                      <span>Simpan Barang / Pulsa</span>
+                    )}
                   </button>
                   <button
                     type="button"
                     onClick={() => setIsAddModalOpen(false)}
-                    className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-xl"
+                    className="px-4 py-2.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl transition cursor-pointer"
                   >
                     Batal
                   </button>
