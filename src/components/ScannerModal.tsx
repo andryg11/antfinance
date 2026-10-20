@@ -16,14 +16,30 @@ import {
   SwitchCamera,
   Layers,
   ArrowRight,
-  Key
+  Key,
+  Package,
+  Plus,
+  Tag
 } from 'lucide-react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { GoogleGenAI } from '@google/genai';
 import { Product } from '../types';
 import { useData } from '../context/DataContext';
 import { uploadToCloudinary } from '../utils/cloudinary';
 import { compressImage } from '../utils/imageCompressor';
+import { formatRupiah } from '../utils/formatters';
+
+const PRODUCT_CATEGORIES = [
+  'Sembako',
+  'Minuman',
+  'Makanan',
+  'Snack',
+  'Rokok',
+  'Pulsa',
+  'BBM',
+  'Aksesoris',
+  'Lainnya',
+];
 
 export interface ScannedVoucherData {
   name: string;
@@ -48,6 +64,7 @@ interface ScannerModalProps {
   onApplySearchQuery?: (query: string) => void;
   onScannedBarcode?: (barcode: string) => void;
   onScannedVoucherInfo?: (voucher: ScannedVoucherData) => void;
+  onProductSaved?: (productName: string) => void;
   title?: string;
   subtitle?: string;
   sourceContext?: 'pos' | 'master_search' | 'master_form';
@@ -79,6 +96,7 @@ interface CardVoucherData {
   imageUrl: string;
   sku: string;
   category: string;
+  isBarcodeItem?: boolean;
 }
 
 export const ScannerModal: React.FC<ScannerModalProps> = ({
@@ -89,6 +107,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   onApplySearchQuery,
   onScannedBarcode,
   onScannedVoucherInfo,
+  onProductSaved,
   title,
   subtitle,
   sourceContext = 'pos',
@@ -118,6 +137,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const [quickApiKeyInput, setQuickApiKeyInput] = useState('');
   const [quickKeySaved, setQuickKeySaved] = useState(false);
   const [matchedProducts, setMatchedProducts] = useState<Product[]>([]);
+  const [aiMatchedProduct, setAiMatchedProduct] = useState<Product | null>(null);
+  const [lastAiVoucherData, setLastAiVoucherData] = useState<CardVoucherData | null>(null);
 
   // Registration / Edit Card states (TIDAK LANGSUNG TERSAVE)
   const [cardVoucherForm, setCardVoucherForm] = useState<CardVoucherData | null>(null);
@@ -140,6 +161,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fallbackCameraInputRef = useRef<HTMLInputElement>(null);
   const cardPhotoFileInputRef = useRef<HTMLInputElement>(null);
+  const cardPhotoCameraInputRef = useRef<HTMLInputElement>(null);
   const qrReaderRef = useRef<Html5Qrcode | null>(null);
 
   // Audio confirmation beep
@@ -250,7 +272,51 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
     }
   }, []);
 
-  // Start QR scanner using Html5Qrcode
+  // Handle scanned QR / Barcode
+  const handleBarcodeScanned = useCallback((code: string) => {
+    if (!code) return;
+    playBeep();
+    const cleanCode = code.trim();
+    setScannedCode(cleanCode);
+    stopQrScanner();
+
+    // Match with products in Data Master
+    const normalizedCode = cleanCode.toLowerCase();
+    const matched = products.find(
+      (p) =>
+        (p.sku && p.sku.toLowerCase() === normalizedCode) ||
+        p.id.toLowerCase() === normalizedCode ||
+        (p.sku && p.sku.replace(/\s+/g, '') === normalizedCode.replace(/\s+/g, ''))
+    );
+
+    if (matched) {
+      setBarcodeMatchedProduct(matched);
+      setCardVoucherForm(null);
+      if (onSelectProduct && sourceContext === 'pos') {
+        onSelectProduct(matched);
+        onClose();
+        return;
+      }
+    } else {
+      // If not yet registered: open registration card with barcode prefilled & optional photo
+      setBarcodeMatchedProduct(null);
+      setCardVoucherForm({
+        name: '',
+        provider: '',
+        quota: '',
+        validity: '',
+        cost: 0,
+        price: 0,
+        stock: 10,
+        imageUrl: '', // Optional photo for barcode!
+        sku: cleanCode,
+        category: 'Sembako',
+        isBarcodeItem: true,
+      });
+    }
+  }, [products, onSelectProduct, sourceContext, onClose, stopQrScanner]);
+
+  // Start QR & Barcode scanner using Html5Qrcode with all standard barcode formats
   const startQrScanner = useCallback(async () => {
     setQrError(null);
     setScannedCode(null);
@@ -265,14 +331,33 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
           await stopQrScanner();
         }
 
-        const html5QrCode = new Html5Qrcode('qr-reader-container');
+        const formatsToSupport = [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODABAR,
+          Html5QrcodeSupportedFormats.ITF,
+          Html5QrcodeSupportedFormats.QR_CODE,
+        ];
+
+        const html5QrCode = new Html5Qrcode('qr-reader-container', {
+          formatsToSupport,
+          verbose: false,
+        });
         qrReaderRef.current = html5QrCode;
 
         await html5QrCode.start(
           { facingMode: 'environment' },
           {
-            fps: 10,
-            qrbox: { width: 250, height: 250 },
+            fps: 15,
+            qrbox: (viewfinderWidth, viewfinderHeight) => {
+              const width = Math.min(Math.floor(viewfinderWidth * 0.88), 340);
+              const height = Math.min(Math.floor(viewfinderHeight * 0.55), 180);
+              return { width: Math.max(width, 220), height: Math.max(height, 120) };
+            },
             aspectRatio: 1.0,
           },
           (decodedText) => {
@@ -289,7 +374,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
         setIsQrScanning(false);
       }
     }, 150);
-  }, [stopQrScanner]);
+  }, [stopQrScanner, handleBarcodeScanned]);
 
   // Switch tabs & start/stop corresponding camera
   useEffect(() => {
@@ -300,6 +385,8 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
       setAiResult(null);
       setAiError(null);
       setMatchedProducts([]);
+      setAiMatchedProduct(null);
+      setLastAiVoucherData(null);
       setScannedCode(null);
       setBarcodeMatchedProduct(null);
       setCardVoucherForm(null);
@@ -309,19 +396,23 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({
 
     if (activeTab === 'ai_vision') {
       stopQrScanner();
-      if (!imagePreview && !cardVoucherForm) {
+      setBarcodeMatchedProduct(null);
+      if (!imagePreview && !cardVoucherForm && !aiMatchedProduct) {
         startLiveCamera(cameraFacing);
       }
     } else if (activeTab === 'qr_barcode') {
       stopLiveCamera();
-      startQrScanner();
+      setAiMatchedProduct(null);
+      if (!cardVoucherForm && !barcodeMatchedProduct) {
+        startQrScanner();
+      }
     }
 
     return () => {
       stopLiveCamera();
       stopQrScanner();
     };
-  }, [isOpen, activeTab, cameraFacing, imagePreview, cardVoucherForm, startLiveCamera, stopLiveCamera, stopQrScanner, startQrScanner]);
+  }, [isOpen, activeTab, cameraFacing, imagePreview, cardVoucherForm, barcodeMatchedProduct, aiMatchedProduct, startLiveCamera, stopLiveCamera, stopQrScanner, startQrScanner]);
 
   // Helper to resize/compress image before sending to AI
   const resizeImage = (base64Str: string, maxWidth = 1600, maxHeight = 1600, quality = 0.9): Promise<string> => {
@@ -631,11 +722,6 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
   };
 
   // Process AI Detection completion:
-  // USER REQUIREMENT:
-  // "saat scan data master atatu tambah barang master tidak langsung tersave melainkan masih di kartu itu
-  // lalu muncul di label nama voucher yang di scan. nanti muncul namanya sama berapa giga dan harinya
-  // kemudian dibawahnya inputan modal dan inputan jual lalu bawahnya lagi ada inputan berapa jumlahnya
-  // baru nnti simpan manual untuk gambar dari gambar yang di foto itu atau dari ambil file"
   const handleAiDetectionComplete = (data: AiScanResult, rawImage: string) => {
     const formattedName = data.productName || 
       `Voucher ${data.provider || ''} ${data.quota || ''} ${data.validityDays ? `${data.validityDays}` : ''}`.replace(/\s+/g, ' ').trim();
@@ -649,20 +735,15 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
       cost: data.suggestedCost && data.suggestedCost > 0 ? data.suggestedCost : 0,
       price: data.suggestedPrice && data.suggestedPrice > 0 ? data.suggestedPrice : 0,
       stock: 10,
-      imageUrl: rawImage, // Foto yang difoto itu!
+      imageUrl: rawImage,
       sku: `VCR-${(data.provider || 'DATA').slice(0, 4).toUpperCase()}${data.quotaGigabytes ? `${data.quotaGigabytes}GB` : Date.now().toString().slice(-4)}`,
       category: 'Pulsa',
+      isBarcodeItem: false,
     };
 
-    // If scanning from Data Master or Tambah Barang Master:
-    // TETAP DI KARTU ITU (tidak langsung tersave!)
-    if (sourceContext === 'master_search' || sourceContext === 'master_form') {
-      setCardVoucherForm(voucherCardData);
-      return;
-    }
+    setLastAiVoucherData(voucherCardData);
 
-    // In Kasir (POS):
-    // Check if product already exists in master
+    // Check if matching product already exists in Data Master
     const providerTerm = (data.provider || '').toLowerCase().trim();
     const quotaTerm = (data.quota || '').toLowerCase().trim();
     const gigabytes = data.quotaGigabytes;
@@ -690,7 +771,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
         (gigabytes && (pName.includes(`${gigabytes}gb`) || pName.includes(`${gigabytes} gb`)));
 
       if (hasProvider && hasQuota) return true;
-      if (hasQuota) return true;
+      if (hasQuota && (pCat.includes('pulsa') || pCat.includes('voucher') || pName.includes('voucher') || pName.includes('gb'))) return true;
       if (hasProvider && data.productName && pName.includes(data.productName.toLowerCase())) return true;
       return false;
     });
@@ -711,77 +792,27 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
     setMatchedProducts(matches);
 
-    // In POS: If already registered in master, auto-select immediately
-    if (matches.length > 0 && onSelectProduct) {
-      playBeep();
-      onSelectProduct(matches[0]);
-      onClose();
-      return;
-    }
-
-    // In POS: If NOT found in master, show card so cashier can easily register it
-    setCardVoucherForm(voucherCardData);
-  };
-
-  // Handle scanned QR / Barcode
-  const handleBarcodeScanned = (code: string) => {
-    if (!code) return;
-    playBeep();
-    setScannedCode(code);
-    stopQrScanner();
-
-    // Match with products in Data Master
-    const normalizedCode = code.trim().toLowerCase();
-    const matched = products.find(
-      (p) =>
-        (p.sku && p.sku.toLowerCase() === normalizedCode) ||
-        p.id.toLowerCase() === normalizedCode ||
-        p.name.toLowerCase().includes(normalizedCode)
-    );
-
-    if (matched) {
-      setBarcodeMatchedProduct(matched);
+    // If voucher ALREADY EXISTS in Data Master:
+    if (matches.length > 0) {
       if (onSelectProduct && sourceContext === 'pos') {
-        onSelectProduct(matched);
+        playBeep();
+        onSelectProduct(matches[0]);
         onClose();
         return;
       }
+      // Show "Voucher / Barang Sudah Ada di Data Master" card!
+      setAiMatchedProduct(matches[0]);
+      setCardVoucherForm(null);
+      return;
     }
 
-    // If scanning in master: open registration card with barcode prefilled
-    if (sourceContext === 'master_search' || sourceContext === 'master_form') {
-      if (matched) {
-        setCardVoucherForm({
-          name: matched.name,
-          provider: matched.provider || '',
-          quota: matched.quota || '',
-          validity: matched.validity || '',
-          cost: matched.cost,
-          price: matched.price,
-          stock: matched.stock,
-          imageUrl: matched.imageUrl || '',
-          sku: matched.sku || code,
-          category: matched.category,
-        });
-      } else {
-        setCardVoucherForm({
-          name: '',
-          provider: '',
-          quota: '',
-          validity: '',
-          cost: 0,
-          price: 0,
-          stock: 10,
-          imageUrl: '',
-          sku: code,
-          category: 'Sembako',
-        });
-      }
-    }
+    // If voucher NOT YET in Data Master: recommend input to master!
+    setAiMatchedProduct(null);
+    setCardVoucherForm(voucherCardData);
   };
 
-  // USER REQUIREMENT: Manual Save to Data Master
-  const handleManualSaveMasterProduct = async () => {
+  // USER REQUIREMENT: Save directly to Data Master in 1 Step
+  const handleSaveMasterProduct = async () => {
     if (!cardVoucherForm) return;
     if (!cardVoucherForm.name.trim()) {
       alert('Nama barang / voucher tidak boleh kosong');
@@ -811,11 +842,13 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
         }
       }
 
-      // Save to Firestore / Data Master
+      const savedProductName = cardVoucherForm.name.trim();
+
+      // Save to Firestore / Data Master in 1 single step!
       await addProduct({
-        name: cardVoucherForm.name.trim(),
-        category: cardVoucherForm.category || 'Pulsa',
-        sku: cardVoucherForm.sku || `VCR-${Date.now().toString().slice(-4)}`,
+        name: savedProductName,
+        category: cardVoucherForm.category || (cardVoucherForm.isBarcodeItem ? 'Sembako' : 'Pulsa'),
+        sku: cardVoucherForm.sku || (cardVoucherForm.isBarcodeItem ? `BAR-${Date.now()}` : `VCR-${Date.now().toString().slice(-4)}`),
         price: Number(cardVoucherForm.price) || 0,
         cost: Number(cardVoucherForm.cost) || 0,
         stock: Number(cardVoucherForm.stock) || 0,
@@ -823,29 +856,18 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
         unit: 'Pcs',
         isFuel: false,
         imageUrl: finalImageUrl,
-        provider: cardVoucherForm.provider,
-        quota: cardVoucherForm.quota,
-        validity: cardVoucherForm.validity,
+        provider: cardVoucherForm.provider || undefined,
+        quota: cardVoucherForm.quota || undefined,
+        validity: cardVoucherForm.validity || undefined,
       });
 
-      // If opened from Master Form, also update parent form
-      if (onScannedVoucherInfo) {
-        onScannedVoucherInfo({
-          name: cardVoucherForm.name.trim(),
-          category: cardVoucherForm.category || 'Pulsa',
-          sku: cardVoucherForm.sku,
-          imageUrl: finalImageUrl,
-          provider: cardVoucherForm.provider,
-          quota: cardVoucherForm.quota,
-          validityDays: cardVoucherForm.validity,
-          suggestedCost: cardVoucherForm.cost,
-          suggestedPrice: cardVoucherForm.price,
-          isCloudinaryUploaded: true,
-        });
+      // Notify parent that product has been saved directly to master
+      if (onProductSaved) {
+        onProductSaved(savedProductName);
       }
 
       playBeep();
-      setSaveSuccessMessage(`✓ Berhasil menyimpan "${cardVoucherForm.name}" ke Data Master!`);
+      setSaveSuccessMessage(`✓ Berhasil menyimpan "${savedProductName}" ke Data Master!`);
 
       setTimeout(() => {
         setIsSavingMasterProduct(false);
@@ -853,7 +875,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
         setImagePreview(null);
         setAiResult(null);
         onClose();
-      }, 1200);
+      }, 1000);
     } catch (err: any) {
       console.error('Error saving master product:', err);
       alert('Gagal menyimpan ke Data Master: ' + (err.message || 'Error'));
@@ -881,7 +903,7 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
               </h2>
               <p className="text-xs text-slate-500">
                 {subtitle || (sourceContext === 'master_search' || sourceContext === 'master_form'
-                  ? 'Scan kartu kuota, isi modal, jual, & stok, lalu simpan manual'
+                  ? 'Scan kartu kuota, isi modal, jual, & stok, lalu simpan'
                   : 'Scan kamera untuk kasir cepat & otomatis')}
               </p>
             </div>
@@ -898,8 +920,8 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
           </button>
         </div>
 
-        {/* Tab Selector (Hidden if card form is active) */}
-        {!cardVoucherForm && (
+        {/* Tab Selector (Hidden if card form or matched product is active) */}
+        {!cardVoucherForm && !barcodeMatchedProduct && !aiMatchedProduct && (
           <div className="flex border-b border-slate-100 bg-slate-50 text-xs font-bold">
             <button
               type="button"
@@ -936,40 +958,290 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
 
           {/* =================================================================== */}
-          {/* USER REQUIREMENT: KARTU DATA MASTER (TIDAK LANGSUNG TERSAVE)        */}
+          {/* KONDISI 1: BARANG SUDAH ADA DI DATA MASTER (HASIL SCAN BARCODE)     */}
           {/* =================================================================== */}
-          {cardVoucherForm ? (
+          {barcodeMatchedProduct ? (
+            <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm p-4 sm:p-5 space-y-4 animate-in zoom-in-95">
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-sm text-emerald-900">Barang Sudah Ada di Data Master!</h4>
+                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-md">
+                      Terdaftar
+                    </span>
+                  </div>
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    Kode barcode <b>"{barcodeMatchedProduct.sku || scannedCode}"</b> telah terdaftar dalam sistem.
+                  </p>
+                </div>
+              </div>
+
+              {/* Tampilan Kartu Barang */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center gap-4 text-left">
+                <div className="relative w-24 h-24 rounded-2xl overflow-hidden bg-white border border-slate-200 shrink-0 shadow-xs flex items-center justify-center">
+                  {barcodeMatchedProduct.imageUrl ? (
+                    <img
+                      src={barcodeMatchedProduct.imageUrl}
+                      alt={barcodeMatchedProduct.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Package className="w-10 h-10 text-slate-400" />
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0 space-y-1.5 w-full">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="px-2 py-0.5 bg-slate-200 text-slate-800 text-[10px] font-bold rounded-md">
+                      {barcodeMatchedProduct.category}
+                    </span>
+                    <span className="px-2 py-0.5 bg-teal-100 text-teal-800 text-[10px] font-bold rounded-md font-mono">
+                      Barcode: {barcodeMatchedProduct.sku || scannedCode}
+                    </span>
+                  </div>
+
+                  <h3 className="font-bold text-base text-slate-900 leading-snug">
+                    {barcodeMatchedProduct.name}
+                  </h3>
+
+                  <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+                    <div className="bg-white p-2 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 block font-medium">Harga Jual</span>
+                      <span className="font-black text-teal-700 text-xs sm:text-sm">{formatRupiah(barcodeMatchedProduct.price)}</span>
+                    </div>
+                    <div className="bg-white p-2 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 block font-medium">Modal (HPP)</span>
+                      <span className="font-bold text-slate-700 text-xs sm:text-sm">{formatRupiah(barcodeMatchedProduct.cost)}</span>
+                    </div>
+                    <div className="bg-white p-2 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 block font-medium">Stok</span>
+                      <span className="font-bold text-slate-900 text-xs sm:text-sm">{barcodeMatchedProduct.stock} {barcodeMatchedProduct.unit || 'Pcs'}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                {onSelectProduct && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectProduct(barcodeMatchedProduct);
+                      onClose();
+                    }}
+                    className="flex-1 py-3 px-4 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Pilih Barang ke Kasir</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBarcodeMatchedProduct(null);
+                    setScannedCode(null);
+                    startQrScanner();
+                  }}
+                  className="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 text-slate-500" />
+                  <span>Scan Barcode Lain</span>
+                </button>
+              </div>
+            </div>
+          ) : aiMatchedProduct ? (
+            /* =================================================================== */
+            /* KONDISI 2: VOUCHER SUDAH ADA DI DATA MASTER (HASIL AI VISION)       */
+            /* =================================================================== */
+            <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm p-4 sm:p-5 space-y-4 animate-in zoom-in-95">
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-start gap-3">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-sm text-emerald-900">Voucher Sudah Ada di Data Master!</h4>
+                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-md">
+                      Sudah Ada
+                    </span>
+                  </div>
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    Voucher hasil scan ini cocok dengan barang yang sudah terdaftar di Data Master.
+                  </p>
+                </div>
+              </div>
+
+              {/* Tampilan Kartu Voucher yang Ditemukan */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center gap-4 text-left">
+                <div className="relative w-24 h-24 rounded-2xl overflow-hidden bg-white border border-slate-200 shrink-0 shadow-xs flex items-center justify-center">
+                  {aiMatchedProduct.imageUrl ? (
+                    <img
+                      src={aiMatchedProduct.imageUrl}
+                      alt={aiMatchedProduct.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : imagePreview ? (
+                    <img
+                      src={imagePreview}
+                      alt="Foto Scan"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <Sparkles className="w-10 h-10 text-amber-500" />
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0 space-y-1.5 w-full">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {aiMatchedProduct.provider && (
+                      <span className="px-2 py-0.5 bg-white text-teal-800 font-bold rounded-md border border-teal-200 text-[10px]">
+                        📶 {aiMatchedProduct.provider}
+                      </span>
+                    )}
+                    {aiMatchedProduct.quota && (
+                      <span className="px-2 py-0.5 bg-white text-teal-900 font-extrabold rounded-md border border-teal-200 text-[10px]">
+                        ⚡ {aiMatchedProduct.quota}
+                      </span>
+                    )}
+                    {aiMatchedProduct.validity && (
+                      <span className="px-2 py-0.5 bg-white text-amber-800 font-bold rounded-md border border-amber-200 text-[10px]">
+                        ⏳ {aiMatchedProduct.validity}
+                      </span>
+                    )}
+                  </div>
+
+                  <h3 className="font-bold text-base text-slate-900 leading-snug">
+                    {aiMatchedProduct.name}
+                  </h3>
+
+                  <div className="grid grid-cols-3 gap-2 pt-1 text-xs">
+                    <div className="bg-white p-2 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 block font-medium">Harga Jual</span>
+                      <span className="font-black text-teal-700 text-xs sm:text-sm">{formatRupiah(aiMatchedProduct.price)}</span>
+                    </div>
+                    <div className="bg-white p-2 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 block font-medium">Modal (HPP)</span>
+                      <span className="font-bold text-slate-700 text-xs sm:text-sm">{formatRupiah(aiMatchedProduct.cost)}</span>
+                    </div>
+                    <div className="bg-white p-2 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 block font-medium">Stok</span>
+                      <span className="font-bold text-slate-900 text-xs sm:text-sm">{aiMatchedProduct.stock} Pcs</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-col gap-2">
+                {onSelectProduct && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectProduct(aiMatchedProduct);
+                      onClose();
+                    }}
+                    className="w-full py-3 px-4 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Pilih Voucher ke Kasir</span>
+                  </button>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAiMatchedProduct(null);
+                      setImagePreview(null);
+                      setAiResult(null);
+                      startLiveCamera(cameraFacing);
+                    }}
+                    className="flex-1 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                  >
+                    <RotateCcw className="w-4 h-4 text-slate-500" />
+                    <span>Foto / Scan Ulang</span>
+                  </button>
+                  {lastAiVoucherData && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAiMatchedProduct(null);
+                        setCardVoucherForm(lastAiVoucherData);
+                      }}
+                      className="flex-1 py-2.5 px-3 bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-800 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4 text-teal-600" />
+                      <span>Tambah Sebagai Baru</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : cardVoucherForm ? (
+            /* =================================================================== */
+            /* KONDISI 3: BELUM ADA DI DATA MASTER - FORM INPUT KE MASTER          */
+            /* =================================================================== */
             <div className="bg-white rounded-2xl border border-teal-100 shadow-xs p-4 sm:p-5 space-y-4 animate-in zoom-in-95">
               
               {/* Header Kartu */}
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center font-bold">
-                    <Sparkles className="w-4 h-4 text-teal-700" />
+                    {cardVoucherForm.isBarcodeItem ? <ScanLine className="w-4 h-4 text-teal-700" /> : <Sparkles className="w-4 h-4 text-teal-700" />}
                   </div>
                   <div>
-                    <h3 className="text-sm font-bold text-slate-800">Kartu Tambah Voucher Master</h3>
-                    <p className="text-[11px] text-slate-500">Periksa nama, input modal, jual & jumlah, lalu simpan manual</p>
+                    <h3 className="text-sm font-bold text-slate-800">
+                      {cardVoucherForm.isBarcodeItem ? 'Tambah Barang Baru (Barcode)' : 'Kartu Tambah Voucher Master'}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {cardVoucherForm.isBarcodeItem 
+                        ? 'Lengkapi info barang & foto produk (opsional), lalu klik Simpan'
+                        : 'Periksa nama, input modal, jual & jumlah, lalu klik Simpan'}
+                    </p>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  Hasil AI Terbaca
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                  cardVoucherForm.isBarcodeItem 
+                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                    : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                }`}>
+                  {cardVoucherForm.isBarcodeItem ? 'Barcode Baru' : 'Hasil AI Terbaca'}
                 </span>
               </div>
 
-              {/* 1. Pratinjau Foto: Dari Foto yang Di-scan ATAU Ambil File Galeri */}
+              {/* Status Banner Belum Terdaftar */}
+              {cardVoucherForm.isBarcodeItem ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2.5 text-xs text-amber-900">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <div>
+                    Barang dengan barcode <b>"{cardVoucherForm.sku}"</b> belum ada di Data Master. Silakan lengkapi data untuk mendaftarkannya:
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-xl flex items-center gap-2.5 text-xs text-teal-900">
+                  <Sparkles className="w-4 h-4 text-teal-600 shrink-0" />
+                  <div>
+                    Voucher belum ada di Data Master. Rekomendasi input ke Master berdasarkan hasil scan AI:
+                  </div>
+                </div>
+              )}
+
+              {/* 1. Foto Produk: Opsional untuk Barcode, Kamera/Upload untuk Voucher */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-700">Foto Barang / Voucher</label>
-                  <span className="text-[10px] text-slate-400">Dari foto scan atau ambil file</span>
+                  <label className="text-xs font-bold text-slate-700">
+                    {cardVoucherForm.isBarcodeItem ? 'Foto Produk (Opsional)' : 'Foto Voucher'}
+                  </label>
+                  <span className="text-[10px] text-slate-400">
+                    {cardVoucherForm.isBarcodeItem ? 'Boleh dikosongkan atau lampirkan foto' : 'Dari foto scan atau ambil file'}
+                  </span>
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-center gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <div className="relative w-28 h-28 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-300 shadow-inner flex items-center justify-center">
+                  <div className="relative w-24 h-24 rounded-xl overflow-hidden bg-slate-200 shrink-0 border border-slate-300 shadow-inner flex items-center justify-center">
                     {cardVoucherForm.imageUrl ? (
                       <img
                         src={cardVoucherForm.imageUrl}
-                        alt="Foto Voucher"
+                        alt="Foto Barang"
                         className="w-full h-full object-cover"
                       />
                     ) : (
@@ -979,30 +1251,38 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
 
                   <div className="flex-1 space-y-2 w-full text-left">
                     <p className="text-[11px] text-slate-600 leading-snug">
-                      Foto di samping adalah foto voucher yang baru saja discan. Anda bisa menggunakan foto ini atau ganti dengan mengambil file dari galeri.
+                      {cardVoucherForm.imageUrl 
+                        ? 'Foto produk telah terpasang. Anda dapat mengganti atau menghapusnya.' 
+                        : (cardVoucherForm.isBarcodeItem 
+                            ? 'Lampirkan foto produk dari kamera atau galeri HP (opsional).' 
+                            : 'Foto voucher hasil scan kamera siap disimpan.')}
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => cardPhotoFileInputRef.current?.click()}
-                        className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
+                        onClick={() => cardPhotoCameraInputRef.current?.click()}
+                        className="px-2.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
                       >
-                        <Upload className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Ganti / Ambil File Galeri</span>
+                        <Camera className="w-3.5 h-3.5" />
+                        <span>Kamera HP</span>
                       </button>
                       <button
                         type="button"
-                        onClick={() => {
-                          setCardVoucherForm(null);
-                          setImagePreview(null);
-                          setAiResult(null);
-                          startLiveCamera(cameraFacing);
-                        }}
-                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
+                        onClick={() => cardPhotoFileInputRef.current?.click()}
+                        className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer shadow-2xs"
                       >
-                        <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Foto Ulang</span>
+                        <Upload className="w-3.5 h-3.5 text-slate-500" />
+                        <span>Galeri</span>
                       </button>
+                      {cardVoucherForm.imageUrl && cardVoucherForm.isBarcodeItem && (
+                        <button
+                          type="button"
+                          onClick={() => setCardVoucherForm({ ...cardVoucherForm, imageUrl: '' })}
+                          className="px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-semibold cursor-pointer"
+                        >
+                          Hapus Foto
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1014,20 +1294,47 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                   onChange={handleCardPhotoChange}
                   className="hidden"
                 />
+                <input
+                  type="file"
+                  ref={cardPhotoCameraInputRef}
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleCardPhotoChange}
+                  className="hidden"
+                />
               </div>
 
-              {/* 2. Label Nama Voucher yang di-scan: Nama, Berapa Giga, dan Harinya */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-700">
-                    Label Nama Voucher yang Di-scan *
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-semibold">
-                    Nama + Berapa Giga + Harinya
-                  </span>
+              {/* Barcode & Kategori */}
+              {cardVoucherForm.isBarcodeItem ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Kode Barcode (SKU)
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={cardVoucherForm.sku}
+                      className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl font-mono font-bold text-slate-700 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Kategori Produk *
+                    </label>
+                    <select
+                      value={cardVoucherForm.category}
+                      onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, category: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 text-xs"
+                    >
+                      {PRODUCT_CATEGORIES.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-
-                {/* Badge ringkasan: Provider, Giga, Hari, Tulisan Spidol */}
+              ) : (
+                /* Badge ringkasan voucher */
                 <div className="flex flex-wrap gap-1.5 p-2 bg-teal-50/80 rounded-xl border border-teal-100 text-xs">
                   {cardVoucherForm.provider && (
                     <span className="px-2 py-0.5 bg-white text-teal-800 font-bold rounded-md border border-teal-200">
@@ -1050,19 +1357,24 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                     </span>
                   )}
                 </div>
+              )}
 
-                {/* Input teks Nama Voucher */}
+              {/* 2. Nama Barang / Voucher */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Nama Barang *
+                </label>
                 <input
                   type="text"
                   required
                   value={cardVoucherForm.name}
                   onChange={(e) => setCardVoucherForm({ ...cardVoucherForm, name: e.target.value })}
-                  placeholder="Contoh: Voucher Tri 10 GB 3 Hari"
+                  placeholder={cardVoucherForm.isBarcodeItem ? 'Contoh: Indomie Goreng 85g, Kopi Kapal Api...' : 'Contoh: Voucher Tri 10 GB 3 Hari'}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl focus:ring-1 focus:ring-teal-500 font-bold text-slate-900 text-sm"
                 />
               </div>
 
-              {/* 3. Inputan Modal (Harga Beli) & Inputan Jual (Harga Jual) */}
+              {/* 3. Inputan Modal & Jual */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1135,23 +1447,23 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                 </div>
               )}
 
-              {/* 5. Tombol Simpan Manual */}
+              {/* 5. Tombol Simpan */}
               <div className="pt-2 flex flex-col sm:flex-row gap-2">
                 <button
                   type="button"
                   disabled={isSavingMasterProduct}
-                  onClick={handleManualSaveMasterProduct}
+                  onClick={handleSaveMasterProduct}
                   className="flex-1 py-3 px-4 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
                 >
                   {isSavingMasterProduct ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin text-white" />
-                      <span>Menyimpan ke Data Master...</span>
+                      <span>Menyimpan...</span>
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>💾 Simpan Manual ke Data Master</span>
+                      <span>Simpan</span>
                     </>
                   )}
                 </button>
@@ -1162,7 +1474,12 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                     setCardVoucherForm(null);
                     setImagePreview(null);
                     setAiResult(null);
-                    startLiveCamera(cameraFacing);
+                    setScannedCode(null);
+                    if (activeTab === 'ai_vision') {
+                      startLiveCamera(cameraFacing);
+                    } else {
+                      startQrScanner();
+                    }
                   }}
                   className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold text-xs transition cursor-pointer"
                 >
@@ -1425,23 +1742,26 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                       <QrCode className="w-3.5 h-3.5" />
                     </div>
                     <div className="text-xs text-blue-900 leading-relaxed">
-                      <span className="font-bold">Scan Barcode / QR Code:</span> Arahkan kamera ke barcode produk fisik atau kemasan.
+                      <span className="font-bold">Scan Barcode / QR Code:</span> Arahkan kamera ke barcode produk fisik atau kemasan. Sistem akan langsung membaca dan mendeteksi barcode secara instan.
                     </div>
                   </div>
 
                   {/* Viewfinder container */}
-                  <div className="relative rounded-2xl overflow-hidden bg-black aspect-square max-w-[300px] mx-auto flex items-center justify-center shadow-md border border-slate-800">
+                  <div className="relative rounded-2xl overflow-hidden bg-black aspect-4/3 max-w-sm mx-auto flex items-center justify-center shadow-md border border-slate-800">
                     <div id="qr-reader-container" className="w-full h-full" />
 
                     {isQrScanning && (
                       <div className="absolute inset-0 pointer-events-none flex flex-col justify-center items-center">
-                        <div className="w-44 h-44 border-2 border-teal-400/80 rounded-2xl relative">
-                          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-teal-400" />
-                          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-teal-400" />
-                          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-2 border-b-2 border-teal-400" />
-                          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-2 border-b-2 border-teal-400" />
-                          <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-bounce mt-22" />
+                        <div className="w-60 h-28 border-2 border-teal-400/90 rounded-2xl relative shadow-[0_0_15px_rgba(20,184,166,0.3)]">
+                          <div className="absolute -top-1 -left-1 w-4 h-4 border-t-3 border-l-3 border-teal-400" />
+                          <div className="absolute -top-1 -right-1 w-4 h-4 border-t-3 border-r-3 border-teal-400" />
+                          <div className="absolute -bottom-1 -left-1 w-4 h-4 border-l-3 border-b-3 border-teal-400" />
+                          <div className="absolute -bottom-1 -right-1 w-4 h-4 border-r-3 border-b-3 border-teal-400" />
+                          <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_red] animate-pulse mt-14" />
                         </div>
+                        <span className="mt-3 px-2.5 py-0.5 bg-black/70 text-teal-300 text-[10px] font-bold rounded-full backdrop-blur-xs">
+                          Arahkan Garis Merah ke Garis Barcode
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1461,32 +1781,6 @@ Kembalikan HANYA format JSON murni tanpa markdown triple backticks:
                           Buka Kamera Lagi
                         </button>
                       </div>
-                    </div>
-                  )}
-
-                  {/* Scanned code not found in master */}
-                  {scannedCode && !barcodeMatchedProduct && (
-                    <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-2">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
-                        <div>
-                          Kode Barcode <b>"{scannedCode}"</b> belum terdaftar di Data Master.
-                        </div>
-                      </div>
-
-                      {onScannedBarcode && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onScannedBarcode(scannedCode);
-                            onClose();
-                          }}
-                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
-                        >
-                          <PackageCheck className="w-3.5 h-3.5" />
-                          <span>Daftarkan Kode Barcode Ini ke Data Master</span>
-                        </button>
-                      )}
                     </div>
                   )}
                 </div>

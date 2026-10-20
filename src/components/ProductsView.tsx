@@ -1815,7 +1815,12 @@ export const ProductsView: React.FC = () => {
           setTimeout(() => setScannerFeedback(null), 4000);
         }}
         onScannedBarcode={handleScannerBarcode}
-        onScannedVoucherInfo={handleScannerVoucherInfo}
+        onProductSaved={(name) => {
+          setIsAddModalOpen(false);
+          setEditingProduct(null);
+          setScannerFeedback(`✓ Berhasil menyimpan "${name}" ke Data Master!`);
+          setTimeout(() => setScannerFeedback(null), 5000);
+        }}
       />
     </div>
   );
